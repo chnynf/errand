@@ -1,0 +1,11 @@
+litellm>=1.50.0
+python-dotenv
+aiofiles
+discord.py
+requests
+ddgs
+croniter
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pytest>=8.0
+pytest-asyncio>=0.23

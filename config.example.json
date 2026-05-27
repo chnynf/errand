@@ -1,0 +1,159 @@
+{
+    "models": {
+        "gemini-flash": {
+            "provider": "gemini",
+            "litellm_model": "gemini/gemini-3-flash-preview",
+            "native_tools": true
+        },
+        "gemini-3.5-flash": {
+            "provider": "gemini",
+            "litellm_model": "gemini/gemini-3.5-flash",
+            "native_tools": true
+        },
+        "deepseek-chat": {
+            "provider": "deepseek",
+            "litellm_model": "deepseek/deepseek-chat",
+            "native_tools": true
+        },
+        "openai-compatible-example": {
+            "provider": "example-provider",
+            "litellm_model": "openai/provider/model-name",
+            "api_base": "https://example.com/v1",
+            "api_key_env": "EXAMPLE_PROVIDER_API_KEY",
+            "native_tools": true
+        },
+        "siliconflow-deepseek-v4-flash": {
+            "provider": "siliconflow",
+            "litellm_model": "openai/deepseek-ai/DeepSeek-V4-Flash",
+            "api_base": "https://api.siliconflow.com/v1",
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "native_tools": true,
+            "extra_body": {
+                "enable_thinking": false
+            }
+        },
+        "siliconflow-deepseek-v4-pro": {
+            "provider": "siliconflow",
+            "litellm_model": "openai/deepseek-ai/DeepSeek-V4-Pro",
+            "api_base": "https://api.siliconflow.com/v1",
+            "api_key_env": "SILICONFLOW_API_KEY",
+            "native_tools": true,
+            "extra_body": {
+                "enable_thinking": false
+            }
+        }
+    },
+
+    "model_strategy": [
+        "gemini-3.5-flash",
+        "gemini-flash",
+        "siliconflow-deepseek-v4-flash",
+        "siliconflow-deepseek-v4-pro",
+        "deepseek-chat"
+    ],
+
+    "interfaces": {
+        "discord": {
+            "enabled": true
+        },
+        "cli": {
+            "enabled": false
+        }
+    },
+
+    "scheduler": {
+        "enabled": true,
+        "poll_seconds": 10
+    },
+
+    "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
+    "agent_profile": "~/Documents/agent-kb/kb/generalist/INDEX.md",
+
+    "default_agent": "generalist",
+    "agents": {
+        "generalist": {
+            "description": "Personal generalist orchestrator grounded in the shared KB.",
+            "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
+            "agent_profile": "~/Documents/agent-kb/kb/generalist/INDEX.md",
+            "model_strategy": [
+                "gemini-3.5-flash",
+                "gemini-flash",
+                "siliconflow-deepseek-v4-flash",
+                "siliconflow-deepseek-v4-pro",
+                "deepseek-chat"
+            ],
+            "can_delegate": [
+                "applied-scientist",
+                "cursor",
+                "claude"
+            ]
+        },
+        "applied-scientist": {
+            "description": "Specialist for applied-science reasoning, experiments, metrics, and technical analysis.",
+            "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
+            "agent_profile": "~/Documents/agent-kb/kb/applied-scientist/INDEX.md",
+            "model_strategy": [
+                "gemini-3.5-flash",
+                "gemini-flash",
+                "siliconflow-deepseek-v4-flash"
+            ],
+            "can_delegate": []
+        }
+    },
+
+    "external_agents": {
+        "cursor": {
+            "description": "Cursor CLI-backed coding agent.",
+            "command": [
+                "cursor-agent",
+                "--print",
+                "--trust"
+            ],
+            "prompt_mode": "stdin",
+            "timeout_seconds": 900,
+            "max_output_chars": 20000
+        },
+        "claude": {
+            "description": "Claude CLI-backed coding and reasoning agent.",
+            "command": [
+                "claude",
+                "--output-format",
+                "stream-json",
+                "--input-format",
+                "stream-json",
+                "--verbose",
+                "--permission-prompt-tool",
+                "stdio",
+                "--settings",
+                "{\"alwaysThinkingEnabled\":false}"
+            ],
+            "prompt_mode": "stream_json",
+            "timeout_seconds": 900,
+            "max_output_chars": 20000
+        }
+    },
+
+    "file_access": {
+        "default_scope": "kb",
+        "scopes": {
+            "kb": {
+                "roots": [
+                    "~/Documents/agent-kb/kb"
+                ],
+                "read": true,
+                "list": true
+            },
+            "workspace": {
+                "roots": [
+                    "~/Documents/YFProjects/swarm"
+                ],
+                "read": true,
+                "list": true
+            }
+        }
+    },
+
+    "retry": {
+        "base_delay_seconds": 2
+    }
+}

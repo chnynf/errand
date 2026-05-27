@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Runtime state
+swarm_agent/sessions/_data/
+swarm_agent/interfaces/discord_session_mapping.json
+swarm_agent/scheduler/jobs.json
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
