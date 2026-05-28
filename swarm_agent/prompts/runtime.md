@@ -28,7 +28,7 @@ When delegation tools are available, use them for bounded work that benefits
 from an isolated specialist context or a different external harness.
 
 - Use `invoke_agent` for configured Swarm specialists such as
-  `applied-scientist`.
+  `analyst`.
 - Use `invoke_external_agent` for configured CLI-backed agents such as
   `cursor` or `claude`.
 - If the user explicitly names an external agent (e.g. "ask Claude to …",

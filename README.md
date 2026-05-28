@@ -1,5 +1,11 @@
 # Swarm Agent
 
+## Why Swarm?
+
+It's an AI assistant you can reach from your phone, terminal, or browser, running tools you wrote yourself, with memory across conversations. The whole runtime is under 2,000 lines of Python so it stays lightweight and readable end to end. Feel free to contribute if you share the same interest.
+
+## Features
+
 A personal agent runtime with:
 
 - LiteLLM-backed model routing
@@ -10,7 +16,7 @@ A personal agent runtime with:
 The durable knowledge layer lives outside this repo. The default profile is:
 
 ```text
-~/Documents/agent-kb/INDEX.md
+~/my-kb/INDEX.md
 ```
 
 That index contains the shared agent soul and routes to the relevant sub-KB.
@@ -29,13 +35,21 @@ That index contains the shared agent soul and routes to the relevant sub-KB.
     ```
 
 3.  **Set up environment variables**:
-    - Add your model API keys, e.g. `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `SILICONFLOW_API_KEY`
-    - Add `DISCORD_TOKEN` if using Discord
-    - Add email / Notion variables only if using those tools
+    ```bash
+    cp .env.example .env
+    # edit .env and fill in your API keys
+    ```
+    At minimum, set one LLM key (`GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, etc.) and
+    `DISCORD_TOKEN` if you want the Discord interface.
 
 4.  **Configure runtime**:
-    - `config.json` is the active local config
-    - `config.example.json` documents the shape
+    ```bash
+    cp config.example.json config.json
+    # edit config.json:
+    #   - set shared_soul / agent_profile to your KB paths (see below)
+    #   - enable/disable interfaces
+    #   - adjust model_strategy to match your API keys
+    ```
 
 ## Usage
 
@@ -67,18 +81,44 @@ If your network requires an HTTP(S) proxy for Discord:
 HTTPS_PROXY=http://host:port HTTP_PROXY=http://host:port python -m swarm_agent --debug
 ```
 
+## Knowledge Base (KB) Quickstart
+
+Swarm reads its agent personality and domain knowledge from plain Markdown files
+outside this repo — your **Knowledge Base (KB)**. This keeps your personal
+instructions and context separate from the runtime code.
+
+Minimal setup:
+
+```
+~/my-kb/
+  SOUL.md           # shared values, tone, always-on instructions
+  generalist/
+    INDEX.md        # agent profile: role, skills, delegation rules
+```
+
+Point `config.json` at these files:
+
+```json
+"shared_soul": "~/my-kb/SOUL.md",
+"agent_profile": "~/my-kb/generalist/INDEX.md"
+```
+
+The agent will have access to read and list files under the `kb` scope roots you
+configure. Add as many sub-folders, SOPs, or reference files as you like — the
+agent loads them on demand via `read_file` / `list_dir`.
+
 ## Agent Profile and File Access
 
 `config.json` points each Swarm instance at one active agent profile:
 
 ```json
-"shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
-"agent_profile": "~/Documents/agent-kb/kb/applied-scientist/INDEX.md",
+"shared_soul": "~/my-kb/SOUL.md",
+"agent_profile": "~/my-kb/generalist/INDEX.md",
 "file_access": {
     "default_scope": "kb",
     "scopes": {
         "kb": {
-            "roots": ["~/Documents/agent-kb/kb"],
+            "roots": ["~/my-kb"],
             "read": true,
             "list": true
         }
@@ -124,9 +164,9 @@ runtime exposes the tool or the command/service is available in the environment.
 Temporary overrides:
 
 ```bash
-SWARM_SHARED_SOUL=~/Documents/agent-kb/kb/SOUL.md \
-SWARM_AGENT_PROFILE=~/Documents/agent-kb/kb/applied-scientist/INDEX.md \
-SWARM_KNOWLEDGE_ROOTS=~/Documents/agent-kb/kb \
+SWARM_SHARED_SOUL=~/my-kb/SOUL.md \
+SWARM_AGENT_PROFILE=~/my-kb/generalist/INDEX.md \
+SWARM_KNOWLEDGE_ROOTS=~/my-kb \
 python -m swarm_agent --debug
 ```
 
@@ -238,8 +278,8 @@ flowchart TD
 | Contracts | `swarm_agent/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |
 | Prompts | `swarm_agent/prompts/` | Read by `PromptAssembler` | Runtime prompt file | System prompt fragment | Harness-level instructions only |
 
-External knowledge is not a Swarm component. The KB lives at
-`~/Documents/agent-kb/` and is exposed to Swarm through the `kb` file scope.
+External knowledge is not a Swarm component. The KB lives wherever you point
+`file_access.scopes.kb.roots` in `config.json` and is exposed to Swarm through the `kb` file scope.
 
 ### Runtime state
 

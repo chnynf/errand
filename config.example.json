@@ -66,15 +66,15 @@
         "poll_seconds": 10
     },
 
-    "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
-    "agent_profile": "~/Documents/agent-kb/kb/generalist/INDEX.md",
+    "shared_soul": "~/my-kb/SOUL.md",
+    "agent_profile": "~/my-kb/generalist/INDEX.md",
 
     "default_agent": "generalist",
     "agents": {
         "generalist": {
             "description": "Personal generalist orchestrator grounded in the shared KB.",
-            "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
-            "agent_profile": "~/Documents/agent-kb/kb/generalist/INDEX.md",
+            "shared_soul": "~/my-kb/SOUL.md",
+            "agent_profile": "~/my-kb/generalist/INDEX.md",
             "model_strategy": [
                 "gemini-3.5-flash",
                 "gemini-flash",
@@ -83,15 +83,15 @@
                 "deepseek-chat"
             ],
             "can_delegate": [
-                "applied-scientist",
+                "analyst",
                 "cursor",
                 "claude"
             ]
         },
-        "applied-scientist": {
-            "description": "Specialist for applied-science reasoning, experiments, metrics, and technical analysis.",
-            "shared_soul": "~/Documents/agent-kb/kb/SOUL.md",
-            "agent_profile": "~/Documents/agent-kb/kb/applied-scientist/INDEX.md",
+        "analyst": {
+            "description": "Specialist agent for data analysis and research tasks.",
+            "shared_soul": "~/my-kb/SOUL.md",
+            "agent_profile": "~/my-kb/analyst/INDEX.md",
             "model_strategy": [
                 "gemini-3.5-flash",
                 "gemini-flash",
@@ -138,14 +138,14 @@
         "scopes": {
             "kb": {
                 "roots": [
-                    "~/Documents/agent-kb/kb"
+                    "~/my-kb"
                 ],
                 "read": true,
                 "list": true
             },
             "workspace": {
                 "roots": [
-                    "~/Documents/YFProjects/swarm"
+                    "~/my-project"
                 ],
                 "read": true,
                 "list": true
