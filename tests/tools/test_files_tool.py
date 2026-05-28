@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from swarm_agent.config import FileAccessConfig, FileScope, SwarmConfig
-from swarm_agent.tools import files as file_tools
+from errand.config import FileAccessConfig, FileScope, ErrandConfig
+from errand.tools import files as file_tools
 
 
-def _fake_swarm_config(root: Path) -> SwarmConfig:
-    return SwarmConfig(
+def _fake_errand_config(root: Path) -> ErrandConfig:
+    return ErrandConfig(
         file_access=FileAccessConfig(
             default_scope="kb",
             scopes={"kb": FileScope(roots=[str(root)], read=True, list=True)},
@@ -27,8 +27,8 @@ def fake_file_scope(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(
         file_tools,
-        "load_swarm_config",
-        lambda: _fake_swarm_config(root),
+        "load_errand_config",
+        lambda: _fake_errand_config(root),
     )
     return root
 
@@ -62,8 +62,8 @@ def test_list_dir_can_list_relative_subdirectory(fake_file_scope: Path):
 def test_read_file_no_config(monkeypatch):
     monkeypatch.setattr(
         file_tools,
-        "load_swarm_config",
-        lambda: SwarmConfig(file_access=FileAccessConfig()),
+        "load_errand_config",
+        lambda: ErrandConfig(file_access=FileAccessConfig()),
     )
     assert file_tools.read_file("anything").startswith("Error:")
     assert file_tools.list_dir().startswith("Error:")

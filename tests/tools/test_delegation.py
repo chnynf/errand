@@ -1,9 +1,9 @@
-"""Tests for internal Swarm delegation tool."""
+"""Tests for internal Errand delegation tool."""
 
 from dataclasses import dataclass, field
 
-from swarm_agent.config import AgentSpec
-from swarm_agent.tools import delegation
+from errand.config import AgentSpec
+from errand.tools import delegation
 
 
 @dataclass
@@ -21,7 +21,7 @@ async def test_invoke_agent_rejects_disallowed_delegate(monkeypatch):
             "applied-scientist": AgentSpec(id="applied-scientist"),
         }
     )
-    monkeypatch.setattr(delegation, "load_swarm_config", lambda: config)
+    monkeypatch.setattr(delegation, "load_errand_config", lambda: config)
 
     result = await delegation.invoke_agent(
         "applied-scientist",

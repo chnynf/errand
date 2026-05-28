@@ -2,7 +2,7 @@
 
 import sys
 
-from swarm_agent.tools.cli import run_cli
+from errand.tools.cli import run_cli
 
 
 class FakeReplyTarget:

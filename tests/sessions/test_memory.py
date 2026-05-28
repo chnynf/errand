@@ -1,12 +1,12 @@
-from swarm_agent.contracts.types import ToolCall, ToolResult
-from swarm_agent.sessions.memory import Memory
+from errand.contracts.types import ToolCall, ToolResult
+from errand.sessions.memory import Memory
 
 
 def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr("swarm_agent.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
 
     memory.add_history("user", "Read the profile.")
@@ -72,7 +72,7 @@ def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
 
 
 def test_working_trace_is_available_for_current_turn_only(monkeypatch, tmp_path):
-    monkeypatch.setattr("swarm_agent.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
     memory.add_history("user", "Read the profile.")
 

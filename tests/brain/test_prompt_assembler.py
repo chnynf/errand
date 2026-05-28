@@ -4,15 +4,15 @@ We assert the structural shape (sections present, profile/scopes
 surfaced), not the exact wording of the static prompt fragments.
 """
 
-from swarm_agent.brain.prompt_assembler import PromptAssembler
-from swarm_agent.config import FileAccessConfig, FileScope
+from errand.brain.prompt_assembler import PromptAssembler
+from errand.config import FileAccessConfig, FileScope
 
 
 def test_system_prompt_includes_runtime_and_context_header():
     assembler = PromptAssembler()
     prompt = assembler.build_system_prompt()
     assert "CURRENT CONTEXT:" in prompt
-    assert "Swarm Runtime" in prompt
+    assert "Errand Runtime" in prompt
 
 
 def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):

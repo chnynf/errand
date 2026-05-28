@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from swarm_agent.config import FileAccessConfig, FileScope
-from swarm_agent.tools._file_access import is_within_roots, list_dir, read_file
+from errand.config import FileAccessConfig, FileScope
+from errand.tools._file_access import is_within_roots, list_dir, read_file
 
 
 def _config(root: Path, **scope_kwargs) -> FileAccessConfig:

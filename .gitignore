@@ -12,13 +12,13 @@ env/
 .venv/
 
 # Runtime state
-swarm_agent/sessions/_data/
-swarm_agent/interfaces/discord_session_mapping.json
-swarm_agent/scheduler/jobs.json
+errand/sessions/_data/
+errand/interfaces/discord_session_mapping.json
+errand/scheduler/jobs.json
 
 # Personal config — copy config.example.json → config.json to get started
 config.json
-swarm_agent/contacts.md
+errand/contacts.md
 
 # IDE
 .DS_Store

@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from swarm_agent.brain import Brain
-from swarm_agent.contracts.types import ToolCall, ToolDefinition, ToolResult
+from errand.brain import Brain
+from errand.contracts.types import ToolCall, ToolDefinition, ToolResult
 
 
 def _mk_response(*, content=None, tool_calls=None):
@@ -116,9 +116,9 @@ async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
 
     mock_acompletion = AsyncMock(side_effect=[rate_limit, success_response])
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("swarm_agent.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.decide(
             context_text="ctx",
             instruction="instr",
@@ -164,9 +164,9 @@ async def test_submit_tool_results_falls_back_to_decide_on_failure(brain):
 
     mock_acompletion = AsyncMock(side_effect=[conn_error, final_response])
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("swarm_agent.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.submit_tool_results(
             tool_calls=tool_calls,
             tool_results=tool_results,
@@ -224,9 +224,9 @@ async def test_submit_tool_results_skips_failed_model_not_provider(brain):
 
     mock_acompletion = AsyncMock(side_effect=[conn_error, final_response])
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("swarm_agent.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.submit_tool_results(
             tool_calls=tool_calls,
             tool_results=tool_results,

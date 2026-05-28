@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from swarm_agent.config import load_raw_config, load_swarm_config
+from errand.config import load_raw_config, load_errand_config
 
 
 def test_load_raw_config_applies_prompt_resource_overrides(tmp_path: Path, monkeypatch):
@@ -12,8 +12,8 @@ def test_load_raw_config_applies_prompt_resource_overrides(tmp_path: Path, monke
         json.dumps({"shared_soul": "soul-file", "agent_profile": "from-file"}),
         encoding="utf-8",
     )
-    monkeypatch.setenv("SWARM_SHARED_SOUL", "soul-env")
-    monkeypatch.setenv("SWARM_AGENT_PROFILE", "from-env")
+    monkeypatch.setenv("ERRAND_SHARED_SOUL", "soul-env")
+    monkeypatch.setenv("ERRAND_AGENT_PROFILE", "from-env")
 
     data = load_raw_config(config_path)
     assert data["shared_soul"] == "soul-env"
@@ -33,7 +33,7 @@ def test_load_raw_config_applies_knowledge_roots_override(tmp_path: Path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("SWARM_KNOWLEDGE_ROOTS", "root-a:root-b")
+    monkeypatch.setenv("ERRAND_KNOWLEDGE_ROOTS", "root-a:root-b")
 
     data = load_raw_config(config_path)
     assert data["file_access"]["scopes"]["kb"]["roots"] == ["root-a", "root-b"]
@@ -50,7 +50,7 @@ def test_load_raw_config_converts_legacy_knowledge_roots(tmp_path: Path):
     assert data["file_access"]["scopes"]["kb"]["roots"] == ["legacy-root"]
 
 
-def test_load_swarm_config_synthesizes_legacy_default_agent(tmp_path: Path):
+def test_load_errand_config_synthesizes_legacy_default_agent(tmp_path: Path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps(
@@ -63,7 +63,7 @@ def test_load_swarm_config_synthesizes_legacy_default_agent(tmp_path: Path):
         encoding="utf-8",
     )
 
-    config = load_swarm_config(config_path)
+    config = load_errand_config(config_path)
     agent = config.get_agent()
     assert config.default_agent == "default"
     assert agent.shared_soul == "soul"
@@ -71,7 +71,7 @@ def test_load_swarm_config_synthesizes_legacy_default_agent(tmp_path: Path):
     assert agent.model_strategy == ["m1"]
 
 
-def test_load_swarm_config_parses_agents_and_external_agents(tmp_path: Path):
+def test_load_errand_config_parses_agents_and_external_agents(tmp_path: Path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps(
@@ -99,7 +99,7 @@ def test_load_swarm_config_parses_agents_and_external_agents(tmp_path: Path):
         encoding="utf-8",
     )
 
-    config = load_swarm_config(config_path)
+    config = load_errand_config(config_path)
     assert config.default_agent == "generalist"
     assert config.get_agent().agent_profile == "generalist-profile"
     assert config.get_agent("applied-scientist").model_strategy == ["fallback"]

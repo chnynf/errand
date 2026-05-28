@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from swarm_agent.brain.providers.litellm import LiteLLMProvider
-from swarm_agent.contracts.types import ToolCall, ToolDefinition, ToolResult
+from errand.brain.providers.litellm import LiteLLMProvider
+from errand.contracts.types import ToolCall, ToolDefinition, ToolResult
 
 
 def _mk_response(*, content=None, tool_calls=None, prompt_tokens=10, completion_tokens=5):
@@ -53,7 +53,7 @@ async def test_text_response_parses_context_summary(provider):
         content="The answer is 42.\n---\nContext: User asked for the answer."
     )
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, usage = await provider.generate_with_tools(
@@ -83,7 +83,7 @@ async def test_tool_call_parsing(provider, calculator_tool):
         tool_calls=[_mk_tool_call("tc-abc", "calculate", {"expression": "1+1"})]
     )
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, usage = await provider.generate_with_tools(
@@ -109,7 +109,7 @@ async def test_tool_call_parsing(provider, calculator_tool):
 async def test_api_base_and_key_passthrough_for_openai_compatible(provider, calculator_tool):
     response = _mk_response(content="ok")
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         await provider.generate_with_tools(
@@ -132,7 +132,7 @@ async def test_continue_with_tool_results_builds_messages(provider, calculator_t
     tool_results = [ToolResult(tool_call_id="tc-1", name="calculate", content="2")]
 
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, _ = await provider.continue_with_tool_results(
@@ -161,7 +161,7 @@ async def test_generate_decision_json_mode_strips_fences(provider):
     response = _mk_response(content='```json\n{"actions": [], "external_response": "hi"}\n```')
     schema = {"type": "object"}
     with patch(
-        "swarm_agent.brain.providers.litellm.litellm.acompletion",
+        "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         raw, usage = await provider.generate_decision(

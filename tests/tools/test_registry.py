@@ -1,7 +1,7 @@
 """Tests for `ToolRegistry`.
 
 Uses a temporary tools dir so tests are independent of which Python
-tools currently ship in ``swarm_agent/tools/``.
+tools currently ship in ``errand/tools/``.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ from textwrap import dedent
 
 import pytest
 
-from swarm_agent.tools.registry import ToolRegistry
+from errand.tools.registry import ToolRegistry
 
 
 @pytest.fixture
