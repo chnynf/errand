@@ -16,11 +16,24 @@ from errand.brain.providers.litellm import LiteLLMProvider
 from errand.contracts.types import ToolCall, ToolDefinition, ToolResult
 
 
-def _mk_response(*, content=None, tool_calls=None, prompt_tokens=10, completion_tokens=5):
+def _mk_response(
+    *,
+    content=None,
+    tool_calls=None,
+    prompt_tokens=10,
+    completion_tokens=5,
+    cache_creation_input_tokens=0,
+    cache_read_input_tokens=0,
+):
     """Build a minimal LiteLLM-shaped response object."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls or None)
     choice = SimpleNamespace(message=message)
-    usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+    usage = SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+    )
     return SimpleNamespace(choices=[choice], usage=usage)
 
 
@@ -68,14 +81,17 @@ async def test_text_response_parses_context_summary(provider):
     assert kwargs["model"] == "gemini/gemini-3-flash-preview"
     assert "api_base" not in kwargs
     assert "api_key" not in kwargs
-    assert kwargs["messages"][0] == {"role": "system", "content": "soul"}
+    sys_msg = kwargs["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert sys_msg["content"][0]["text"] == "soul"
+    assert sys_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert kwargs["messages"][1] == {"role": "user", "content": "What is 42?"}
     assert kwargs["tools"] == []
 
     assert decision.tool_calls == []
     assert decision.text_response == "The answer is 42."
     assert decision.context_summary == "User asked for the answer."
-    assert usage == {"input_tokens": 10, "output_tokens": 5}
+    assert usage == {"input_tokens": 10, "output_tokens": 5, "cache_creation_tokens": 0, "cache_read_tokens": 0}
 
 
 async def test_tool_call_parsing(provider, calculator_tool):
@@ -173,10 +189,10 @@ async def test_generate_decision_json_mode_strips_fences(provider):
 
     kwargs = mock.await_args.kwargs
     assert kwargs["response_format"] == {"type": "json_object"}
-    assert "OUTPUT FORMAT" in kwargs["messages"][0]["content"]
+    assert "OUTPUT FORMAT" in kwargs["messages"][0]["content"][0]["text"]
 
     assert raw == {"actions": [], "external_response": "hi"}
-    assert usage == {"input_tokens": 10, "output_tokens": 5}
+    assert usage == {"input_tokens": 10, "output_tokens": 5, "cache_creation_tokens": 0, "cache_read_tokens": 0}
 
 
 def test_is_retryable_classifies_known_litellm_errors(provider):

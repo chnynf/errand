@@ -69,8 +69,13 @@ class PromptAssembler:
         return path.read_text(encoding="utf-8").strip()
 
     def build_system_prompt(self) -> str:
-        """Return the full system prompt for native tool calling."""
-        parts = [_current_context(), self._render_runtime()]
+        """Return the full system prompt for native tool calling.
+
+        Intentionally excludes time-varying content so the prefix is stable
+        and eligible for provider-level prompt caching (Gemini, DeepSeek, …).
+        Per-turn context such as current time is injected in the user message.
+        """
+        parts = [self._render_runtime()]
 
         if self._file_access.scopes:
             parts.append(self._file_access_section())
@@ -79,7 +84,7 @@ class PromptAssembler:
 
     def build_user_prompt(self, context_text: str, instruction: str) -> str:
         """Wrap session context and the per-turn instruction for the model."""
-        return f"SESSION CONTEXT:\n{context_text}\n\nINSTRUCTION:\n{instruction}"
+        return f"{_current_context()}\n\nSESSION CONTEXT:\n{context_text}\n\nINSTRUCTION:\n{instruction}"
 
     def _file_access_section(self) -> str:
         lines = [

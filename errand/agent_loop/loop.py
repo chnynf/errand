@@ -81,6 +81,8 @@ class AgentLoop:
 
         round_input_tokens = 0
         round_output_tokens = 0
+        round_cache_creation_tokens = 0
+        round_cache_read_tokens = 0
         round_tools_used: list[str] = []
         round_models_used: list[str] = []
         last_tool_results: list[ToolResult] = []
@@ -115,6 +117,8 @@ class AgentLoop:
             if not brain_output.get("error"):
                 round_input_tokens += usage.get("input_tokens", 0)
                 round_output_tokens += usage.get("output_tokens", 0)
+                round_cache_creation_tokens += usage.get("cache_creation_tokens", 0)
+                round_cache_read_tokens += usage.get("cache_read_tokens", 0)
                 if usage.get("model"):
                     round_models_used.append(usage.get("model").split("/")[-1])
 
@@ -264,10 +268,12 @@ class AgentLoop:
         unique_models = list(dict.fromkeys(round_models_used))
         models_str = ", ".join(unique_models) if unique_models else "None"
 
+        cache_str = ""
+        if round_cache_creation_tokens or round_cache_read_tokens:
+            cache_str = f" · cache write {round_cache_creation_tokens}, hit {round_cache_read_tokens}"
         usage_msg = (
             f"\n\n---\n*Models used: {models_str}*\n"
-            f"*Tokens used in this round: {round_input_tokens} input, "
-            f"{round_output_tokens} output.*\n"
+            f"*Tokens: {round_input_tokens} in, {round_output_tokens} out{cache_str}*\n"
             f"*Tools used: {tools_str}*"
         )
         if metadata and metadata.get("is_scheduled_task"):

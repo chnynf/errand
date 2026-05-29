@@ -8,11 +8,19 @@ from errand.brain.prompt_assembler import PromptAssembler
 from errand.config import FileAccessConfig, FileScope
 
 
-def test_system_prompt_includes_runtime_and_context_header():
+def test_system_prompt_stable_no_current_context():
     assembler = PromptAssembler()
     prompt = assembler.build_system_prompt()
-    assert "CURRENT CONTEXT:" in prompt
+    # CURRENT CONTEXT must NOT be in the system prompt — it is time-varying
+    # and would break prompt caching by changing the cached prefix every minute.
+    assert "CURRENT CONTEXT:" not in prompt
     assert "Errand Runtime" in prompt
+
+
+def test_user_prompt_includes_current_context():
+    assembler = PromptAssembler()
+    prompt = assembler.build_user_prompt("ctx body", "do thing")
+    assert "CURRENT CONTEXT:" in prompt
 
 
 def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
@@ -68,5 +76,8 @@ def test_soul_and_profile_blocks_are_cached(tmp_path):
 def test_user_prompt_layout():
     assembler = PromptAssembler()
     prompt = assembler.build_user_prompt("ctx body", "do thing")
+    assert "CURRENT CONTEXT:" in prompt
     assert "SESSION CONTEXT:\nctx body" in prompt
     assert "INSTRUCTION:\ndo thing" in prompt
+    # CURRENT CONTEXT must appear before SESSION CONTEXT
+    assert prompt.index("CURRENT CONTEXT:") < prompt.index("SESSION CONTEXT:")

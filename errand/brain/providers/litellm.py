@@ -68,10 +68,39 @@ def _parse_tool_calls(message) -> List[ToolCall]:
 def _extract_usage(response) -> dict:
     usage = getattr(response, "usage", None)
     if not usage:
-        return {"input_tokens": 0, "output_tokens": 0}
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+        }
     return {
         "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
         "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        # Populated by Anthropic and Gemini when prompt caching is active;
+        # zero for providers that don't support it (silently ignored).
+        "cache_creation_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        "cache_read_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+    }
+
+
+def _system_message(system_prompt: str) -> dict:
+    """Wrap the system prompt with a cache_control breakpoint.
+
+    LiteLLM translates the ``cache_control`` field to the correct
+    provider format (Anthropic ``cache_control`` blocks, Gemini
+    ``cachedContents``).  Providers that don't support caching
+    silently ignore the field.
+    """
+    return {
+        "role": "system",
+        "content": [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
     }
 
 
@@ -135,7 +164,7 @@ class LiteLLMProvider(LLMProvider):
         extra_body: Optional[dict] = None,
     ) -> Tuple[BrainDecision, dict]:
         messages = [
-            {"role": "system", "content": system_prompt},
+            _system_message(system_prompt),
             {"role": "user", "content": prompt},
         ]
         response = await litellm.acompletion(
@@ -175,7 +204,7 @@ class LiteLLMProvider(LLMProvider):
         ]
 
         messages = [
-            {"role": "system", "content": system_prompt},
+            _system_message(system_prompt),
             {"role": "user", "content": prompt},
             {"role": "assistant", "tool_calls": assistant_tool_calls},
         ]
@@ -223,7 +252,7 @@ class LiteLLMProvider(LLMProvider):
             "No extra keys are allowed."
         )
         messages = [
-            {"role": "system", "content": system_prompt + schema_instruction},
+            _system_message(system_prompt + schema_instruction),
             {"role": "user", "content": prompt},
         ]
         response = await litellm.acompletion(
