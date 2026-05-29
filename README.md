@@ -11,7 +11,7 @@ A personal agent runtime with:
 - LiteLLM-backed model routing
 - native tool calling from Python tools in `errand/tools/`
 - scoped file access via `read_file` / `list_dir`
-- Discord, CLI, scheduler, and per-session memory
+- Discord, WeChat (iLink ClawBot), CLI, scheduler, and per-session memory
 
 The durable knowledge layer lives outside this repo. The default profile is:
 
@@ -80,6 +80,39 @@ If your network requires an HTTP(S) proxy for Discord:
 ```bash
 HTTPS_PROXY=http://host:port HTTP_PROXY=http://host:port python -m errand --debug
 ```
+
+### WeChat (iLink ClawBot)
+
+Errand connects to WeChat via Tencent's official iLink Bot API — no public IP or
+webhook required. All connections are outbound long-poll to `ilinkai.weixin.qq.com`.
+
+**Prerequisites**: iOS WeChat 8.0.70+ or latest Android. Enable the ClawBot plugin:
+WeChat → Me → Settings → Plugins → ClawBot.
+
+**First run** (one-time login):
+
+```bash
+python -m errand --interface wechat
+```
+
+A browser window opens with a QR code. Scan it in WeChat → ClawBot plugin → confirm.
+Credentials are saved to `errand/interfaces/wechat_creds.json` (git-ignored).
+Subsequent starts reuse the saved token automatically; if the token expires errand
+re-opens the browser for a fresh scan.
+
+**Enable in config.json**:
+
+```json
+"interfaces": {
+    "wechat": { "enabled": true }
+}
+```
+
+**Privacy note**: all messages pass through Tencent's servers (`ilinkai.weixin.qq.com`),
+the same data path as WeChat itself. The bot token is stored locally and never committed.
+
+**Limitation**: WeChat ClawBot is a personal AI assistant channel — only the account
+owner can send messages to the bot. It cannot be added as a contact by other users.
 
 ## Knowledge Base (KB) Quickstart
 
@@ -286,6 +319,8 @@ External knowledge is not an Errand component. The KB lives wherever you point
 - `errand/sessions/_data/` — per-session JSON history (git-ignored)
 - `errand/scheduler/jobs.json` — scheduled jobs (git-ignored)
 - `errand/interfaces/discord_session_mapping.json` — Discord channel mappings (git-ignored)
+- `errand/interfaces/wechat_creds.json` — WeChat bot token (git-ignored)
+- `errand/interfaces/wechat_state.json` — WeChat message cursor (git-ignored)
 
 ### Test Boundaries
 

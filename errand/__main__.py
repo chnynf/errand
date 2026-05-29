@@ -13,7 +13,7 @@ def main() -> None:
     parser.add_argument(
         "--interface",
         action="append",
-        choices=["discord", "cli", "web"],
+        choices=["discord", "cli", "web", "wechat"],
         help="Interface to start. Can be provided more than once. Defaults to config.json.",
     )
     parser.add_argument(
@@ -23,7 +23,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    interfaces = ["discord", "cli", "web"] if args.all else args.interface
+    interfaces = ["discord", "cli", "web", "wechat"] if args.all else args.interface
     try:
         asyncio.run(run_errand(debug=args.debug, interfaces=interfaces))
     except KeyboardInterrupt:

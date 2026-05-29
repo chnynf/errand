@@ -14,6 +14,9 @@ env/
 # Runtime state
 errand/sessions/_data/
 errand/interfaces/discord_session_mapping.json
+errand/interfaces/wechat_creds.json
+errand/interfaces/wechat_state.json
+errand/interfaces/wechat_qr.png
 errand/scheduler/jobs.json
 
 # Personal config — copy config.example.json → config.json to get started

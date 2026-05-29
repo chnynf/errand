@@ -147,6 +147,17 @@ class ErrandApp:
                 from errand.interfaces.web import WebInterface
 
                 interfaces.append(WebInterface(self))
+            elif name == "wechat":
+                from errand.interfaces.wechat_interface import WeChatInterface
+
+                interface = WeChatInterface(self, debug=self.debug)
+                if interface.is_configured():
+                    interfaces.append(interface)
+                else:
+                    print(
+                        "Skipping WeChat interface: no credentials found.\n"
+                        "Run: wechat-clawbot-cc setup"
+                    )
             else:
                 print(f"Skipping unknown interface: {name}")
         return interfaces

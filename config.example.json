@@ -58,6 +58,9 @@
         },
         "cli": {
             "enabled": false
+        },
+        "wechat": {
+            "enabled": false
         }
     },
 

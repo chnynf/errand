@@ -2,6 +2,7 @@ litellm>=1.50.0
 python-dotenv
 aiofiles
 discord.py
+httpx
 requests
 ddgs
 croniter
