@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from errand.runtime.app import ErrandApp
@@ -21,7 +22,7 @@ class WebInterface:
         self._app = app
         self._host = host
         self._port = port
-        self._server: asyncio.Task | None = None
+        self._server: Any | None = None
 
     def is_configured(self) -> bool:
         return True
@@ -43,8 +44,20 @@ class WebInterface:
             log_level="warning",
         )
         server = uvicorn.Server(config)
+        server.capture_signals = contextlib.nullcontext
+        self._server = server
         print(f"Web dashboard: http://{self._host}:{self._port}")
-        await server.serve()
+        try:
+            await server.serve()
+        except asyncio.CancelledError:
+            server.should_exit = True
+            if server.started:
+                await server.shutdown()
+            raise
+        finally:
+            if self._server is server:
+                self._server = None
 
     async def stop(self) -> None:
-        pass
+        if self._server is not None:
+            self._server.should_exit = True

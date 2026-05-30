@@ -43,15 +43,20 @@ class SchedulerService:
 
     async def start(self) -> None:
         """Run scheduler ticks until stopped."""
-        while True:
-            try:
-                await self.run_tick()
-                await asyncio.sleep(self._poll_seconds)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                print(f"Scheduler tick error: {e}")
-                await asyncio.sleep(self._poll_seconds)
+        self._task = asyncio.current_task()
+        try:
+            while True:
+                try:
+                    await self.run_tick()
+                    await asyncio.sleep(self._poll_seconds)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    print(f"Scheduler tick error: {e}")
+                    await asyncio.sleep(self._poll_seconds)
+        finally:
+            if self._task is asyncio.current_task():
+                self._task = None
 
     async def stop(self) -> None:
         """Stop a running scheduler task if one is attached externally."""

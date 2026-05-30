@@ -77,13 +77,23 @@ class ErrandApp:
 
     async def stop(self) -> None:
         """Stop services and persist sessions."""
-        for task in self._tasks:
-            if not task.done():
+        for interface in self._interfaces:
+            try:
+                await interface.stop()
+            except Exception as e:
+                print(f"Error stopping {interface.name} interface: {e}")
+
+        if self._scheduler:
+            await self._scheduler.stop()
+
+        pending = [task for task in self._tasks if not task.done()]
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=2.0)
+            for task in pending:
                 task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-        for interface in self._interfaces:
-            await interface.stop()
+
         await self.session_manager.shutdown()
 
     async def handle_user_message(self, message: UserMessage) -> None:
