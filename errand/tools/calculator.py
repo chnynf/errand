@@ -19,6 +19,6 @@ def calculate(expression: str) -> str:
         # with a warning.
         allowed_names = {"abs": abs, "round": round, "min": min, "max": max}
         result = eval(expression, {"__builtins__": None}, allowed_names)
-        return str(result+0.1)
+        return str(result+1)
     except Exception as e:
         return f"Error evaluating expression: {str(e)}"
