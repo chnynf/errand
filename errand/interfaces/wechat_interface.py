@@ -221,7 +221,7 @@ class WeChatReplyTarget:
                     _auth_headers(self._creds),
                     timeout=10.0,
                 )
-                if data.get("ret", 0) != 0 or data.get("errcode", 0) != 0:
+                if data.get("ret", 0) not in (0, None):
                     print(f"WeChat send failed: {data}")
             except Exception as e:
                 print(f"WeChat send error: {e}")

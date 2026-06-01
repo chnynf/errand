@@ -1,5 +1,5 @@
 from errand.contracts.types import ToolCall, ToolResult
-from errand.sessions.memory import IDLE_BOUNDARY_NOTE, Memory
+from errand.sessions.memory import IDLE_BOUNDARY_NOTE, Memory, _safe_stem
 
 
 def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
@@ -95,3 +95,29 @@ def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
 
     assert f"SESSION NOTE:\n{IDLE_BOUNDARY_NOTE}" in context
     assert "USER:" not in context
+
+
+def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_path):
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    session_id = "wechat:o9cq80wyNyZ@im.wechat"
+    memory = Memory(session_id)
+    assert ":" not in memory._file_stem
+    assert memory.session_id == session_id
+
+
+async def test_archive_session_with_illegal_chars(monkeypatch, tmp_path):
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("wechat:o9cq80wyNyZ@im.wechat")
+    memory.add_history("user", "hi")
+    await memory.save_session()
+
+    await memory.archive_session(start_new=True)
+
+    assert memory.data["history"] == []
+    archives = list((tmp_path / "archive").iterdir())
+    assert len(archives) == 1
+    assert ":" not in archives[0].name
+
+
+def test_safe_stem_replaces_windows_illegal_chars():
+    assert _safe_stem('a:b/c\\d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"

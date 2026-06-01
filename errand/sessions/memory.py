@@ -19,6 +19,13 @@ from errand.contracts.types import ToolCall, ToolResult
 
 _SESSION_DIR = Path(__file__).resolve().parent / "_data"
 _MAX_HISTORY_ENTRIES = 400
+# Characters that are illegal in Windows filenames (e.g. ``:`` in WeChat and
+# scheduled session ids). Mapped to ``_`` so files stay cross-platform safe.
+_FILENAME_ILLEGAL = '<>:"/\\|?*'
+
+
+def _safe_stem(session_id: str) -> str:
+    return "".join("_" if c in _FILENAME_ILLEGAL else c for c in session_id)
 IDLE_BOUNDARY_NOTE = (
     "There was a long idle gap in this conversation. Treat the current message "
     "as a new topic if it does not appear related to the last exchange."
@@ -45,7 +52,8 @@ class Memory:
         self.session_id = session_id
         self.agent_id = agent_id
         self.session_dir = str(_SESSION_DIR)
-        self.session_file = os.path.join(self.session_dir, f"{self.session_id}.json")
+        self._file_stem = _safe_stem(session_id)
+        self.session_file = os.path.join(self.session_dir, f"{self._file_stem}.json")
         self._ensure_session_dir()
         self.data: Dict[str, Any] = self._load_session()
         self.data.setdefault("metadata", {})["agent_id"] = self.agent_id
@@ -284,7 +292,7 @@ class Memory:
             os.makedirs(archive_dir, exist_ok=True)
 
             archive_path = os.path.join(
-                archive_dir, f"{self.session_id}_{int(time.time())}.json"
+                archive_dir, f"{self._file_stem}_{int(time.time())}.json"
             )
             print(f"Archiving session {self.session_id} to {archive_path}")
             try:
