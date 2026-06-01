@@ -71,6 +71,18 @@ def test_load_errand_config_synthesizes_legacy_default_agent(tmp_path: Path):
     assert agent.model_strategy == ["m1"]
 
 
+def test_load_errand_config_parses_session_config(tmp_path: Path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"model_strategy": ["m1"], "sessions": {"idle_boundary_hours": 12}}),
+        encoding="utf-8",
+    )
+
+    config = load_errand_config(config_path)
+
+    assert config.sessions.idle_boundary_hours == 12.0
+
+
 def test_load_errand_config_parses_agents_and_external_agents(tmp_path: Path):
     config_path = tmp_path / "config.json"
     config_path.write_text(

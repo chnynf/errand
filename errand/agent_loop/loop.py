@@ -53,6 +53,15 @@ class AgentLoop:
         self.tool_registry = ToolRegistry()
         self.brain = Brain(debug=debug, agent_spec=self.agent_spec, config=self.config)
 
+    def add_session_note(self, note: str) -> None:
+        self.memory.add_session_note(note)
+
+    def last_activity_at(self) -> Optional[float]:
+        return self.memory.last_activity_at()
+
+    def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
+        self.brain.reload_prompt_resources(soul=soul, profile=profile)
+
     async def process_input(
         self, user_input: str, metadata: Optional[dict] = None
     ) -> str:
@@ -286,6 +295,7 @@ class AgentLoop:
         if not suppress_usage_footer:
             final_response += usage_msg
 
+        self.memory.clear_session_note()
         output_title = "Loop -> Parent Agent" if is_subagent else "Loop -> User"
         debug_log(
             output_title,

@@ -19,6 +19,15 @@ from errand.contracts.types import ToolCall, ToolResult
 
 _SESSION_DIR = Path(__file__).resolve().parent / "_data"
 _MAX_HISTORY_ENTRIES = 400
+IDLE_BOUNDARY_NOTE = (
+    "There was a long idle gap in this conversation. Treat the current message "
+    "as a new topic if it does not appear related to the last exchange."
+)
+RELOAD_BOUNDARY_NOTE = (
+    "Runtime instructions were reloaded. Use the current system instructions "
+    "going forward; prior conversation remains available as history but may "
+    "reflect older instructions."
+)
 
 
 class Memory:
@@ -116,6 +125,18 @@ class Memory:
     def get_delivery_target(self) -> Optional[str]:
         return self.data.get("metadata", {}).get("delivery_target")
 
+    def last_activity_at(self) -> Optional[float]:
+        history = self.data.get("history") or []
+        if history:
+            return float(history[-1].get("timestamp") or 0)
+        return float(self.data.get("created_at") or 0) or None
+
+    def add_session_note(self, note: str) -> None:
+        self.data.setdefault("metadata", {})["session_note"] = note
+
+    def clear_session_note(self) -> None:
+        self.data.setdefault("metadata", {}).pop("session_note", None)
+
     def get_formatted_context(
         self,
         recent_n: int = 20,
@@ -127,6 +148,10 @@ class Memory:
         ctx_summary = self.data.get("context_summary")
         if ctx_summary:
             parts.append(f"CONTEXT SUMMARY:\n{ctx_summary}")
+
+        session_note = self.data.get("metadata", {}).get("session_note")
+        if session_note:
+            parts.append(f"SESSION NOTE:\n{session_note}")
 
         history = self.data["history"]
         visible = [

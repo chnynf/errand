@@ -1,5 +1,5 @@
 from errand.contracts.types import ToolCall, ToolResult
-from errand.sessions.memory import Memory
+from errand.sessions.memory import IDLE_BOUNDARY_NOTE, Memory
 
 
 def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
@@ -84,3 +84,14 @@ def test_working_trace_is_available_for_current_turn_only(monkeypatch, tmp_path)
     assert "# Agent KB" in context
     assert "secret soul" in context
     assert instruction.startswith("The previous action has completed.")
+
+
+def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("test-session")
+
+    memory.add_session_note(IDLE_BOUNDARY_NOTE)
+    context, _ = memory.get_formatted_context()
+
+    assert f"SESSION NOTE:\n{IDLE_BOUNDARY_NOTE}" in context
+    assert "USER:" not in context

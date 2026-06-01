@@ -64,6 +64,18 @@ class SchedulerConfig:
 
 
 @dataclass(frozen=True)
+class SessionConfig:
+    """Config for persisted conversation sessions."""
+
+    idle_boundary_hours: float | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SessionConfig":
+        value = data.get("idle_boundary_hours")
+        return cls(idle_boundary_hours=float(value) if value is not None else None)
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """Runtime identity for one Errand agent."""
 
@@ -132,6 +144,7 @@ class ErrandConfig:
 
     interfaces: dict[str, InterfaceConfig] = field(default_factory=dict)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    sessions: SessionConfig = field(default_factory=SessionConfig)
     file_access: FileAccessConfig = field(default_factory=FileAccessConfig)
     models: dict = field(default_factory=dict)
     model_strategy: list[str] = field(default_factory=list)
@@ -154,6 +167,7 @@ class ErrandConfig:
             enabled=bool(scheduler_data.get("enabled", True)),
             poll_seconds=int(scheduler_data.get("poll_seconds", 10)),
         )
+        sessions = SessionConfig.from_dict(data.get("sessions", {}))
         default_agent = str(data.get("default_agent") or "default")
         defaults = {
             "shared_soul": data.get("shared_soul"),
@@ -191,6 +205,7 @@ class ErrandConfig:
         return cls(
             interfaces=interfaces,
             scheduler=scheduler,
+            sessions=sessions,
             file_access=FileAccessConfig.from_dict(data.get("file_access", {})),
             models=dict(data.get("models") or {}),
             model_strategy=list(data.get("model_strategy") or []),

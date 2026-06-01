@@ -61,6 +61,13 @@ class PromptAssembler:
         self._soul_block: Optional[str] = None
         self._profile_block: Optional[str] = None
 
+    def reload_resources(self, *, soul: bool = True, profile: bool = True) -> None:
+        """Clear selected cached prompt resources; files reload on next prompt."""
+        if soul:
+            self._soul_block = None
+        if profile:
+            self._profile_block = None
+
     @staticmethod
     def _load(filename: str) -> str:
         path = PROMPTS_DIR / filename

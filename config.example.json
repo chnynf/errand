@@ -156,6 +156,10 @@
         }
     },
 
+    "sessions": {
+        "idle_boundary_hours": 24
+    },
+
     "retry": {
         "base_delay_seconds": 2
     }

@@ -98,6 +98,9 @@ class Brain:
         self._last_model: Optional[str] = None
         self._last_call_overrides: Dict[str, Any] = {}
 
+    def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
+        self.prompt_assembler.reload_resources(soul=soul, profile=profile)
+
     def _resolve_model(
         self, model_key: str
     ) -> Tuple[str, str, Optional[bool], Dict[str, Any]]:

@@ -33,6 +33,15 @@ class AgentSession:
         """Process one user/scheduled input and return the final response."""
         return await self._loop.process_input(text, metadata=metadata)
 
+    def add_session_note(self, note: str) -> None:
+        self._loop.add_session_note(note)
+
+    def last_activity_at(self) -> float | None:
+        return self._loop.last_activity_at()
+
+    def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
+        self._loop.reload_prompt_resources(soul=soul, profile=profile)
+
     async def archive(self, start_new: bool = False) -> None:
         """Archive the persisted session file."""
         await self._loop.memory.archive_session(start_new=start_new)

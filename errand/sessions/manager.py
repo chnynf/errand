@@ -1,9 +1,11 @@
 """SessionManager: cache AgentSession instances and serialize work per session."""
 
 import asyncio
+import time
 
 from errand.config import ErrandConfig, load_errand_config
 from errand.sessions.session import AgentSession
+from errand.sessions.memory import IDLE_BOUNDARY_NOTE, RELOAD_BOUNDARY_NOTE
 
 
 class SessionManager:
@@ -48,15 +50,29 @@ class SessionManager:
         lock_key = f"{resolved_agent_id}:{session_id}"
         lock = self._locks.setdefault(lock_key, asyncio.Lock())
         async with lock:
-            return await self.get(
+            session = self.get(
                 session_id,
                 agent_id=resolved_agent_id,
                 delegation_depth=delegation_depth,
-            ).process(text, metadata=metadata)
+            )
+            self._mark_idle_boundary(session)
+            return await session.process(text, metadata=metadata)
 
-    async def archive(self, session_id: str, start_new: bool = False) -> None:
+    def _mark_idle_boundary(self, session: AgentSession) -> None:
+        hours = self._config.sessions.idle_boundary_hours
+        last_activity = session.last_activity_at()
+        if hours and last_activity and time.time() - last_activity > hours * 3600:
+            session.add_session_note(IDLE_BOUNDARY_NOTE)
+
+    async def archive(
+        self,
+        session_id: str,
+        start_new: bool = False,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
         """Archive a session and remove its cached runner."""
-        resolved_agent_id = self._config.default_agent
+        resolved_agent_id = self._config.get_agent(agent_id).id
         cache_key = f"{resolved_agent_id}:{session_id}"
         lock = self._locks.setdefault(cache_key, asyncio.Lock())
         async with lock:
@@ -64,6 +80,19 @@ class SessionManager:
             await session.archive(start_new=start_new)
             if not start_new:
                 self._sessions.pop(cache_key, None)
+
+    def reload_prompt_resources(
+        self,
+        *,
+        soul: bool = True,
+        profile: bool = True,
+        note: str = RELOAD_BOUNDARY_NOTE,
+    ) -> int:
+        """Clear prompt caches for cached sessions and mark a reload boundary."""
+        for session in self._sessions.values():
+            session.reload_prompt_resources(soul=soul, profile=profile)
+            session.add_session_note(note)
+        return len(self._sessions)
 
     async def shutdown(self) -> None:
         """Persist all cached sessions."""
