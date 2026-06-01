@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from errand.contracts.interfaces import UserMessage
+from errand.runtime.control import is_control_command
 
 if TYPE_CHECKING:
     from errand.runtime.app import ErrandApp
@@ -191,7 +192,7 @@ class WeChatReplyTarget:
         from_user_id: str,
         context_token: str,
         session_id: str,
-        pending_approvals: dict,
+        pending_approvals: dict[str, asyncio.Future[bool]],
     ):
         self._creds = creds
         self._from_user_id = from_user_id
@@ -427,6 +428,20 @@ class WeChatInterface:
             pending_approvals=self._pending_approvals,
         )
 
+        if is_control_command(text):
+            pending = self._pending_approvals.pop(session_id, None)
+            if pending and not pending.done():
+                pending.set_result(False)
+            await self._app.handle_user_message(
+                UserMessage(
+                    session_id=session_id,
+                    text=text,
+                    source=self.name,
+                    reply_to=reply_target,
+                )
+            )
+            return
+
         if await self._try_resolve_approval(session_id, text, reply_target):
             return
 
@@ -445,15 +460,15 @@ class WeChatInterface:
         content: str,
         reply_target: WeChatReplyTarget,
     ) -> bool:
-        future = self._pending_approvals.get(session_id)
-        if not future or future.done():
+        pending = self._pending_approvals.get(session_id)
+        if not pending or pending.done():
             return False
         normalized = content.strip().lower()
         if normalized in _APPROVE_KEYWORDS:
-            future.set_result(True)
+            pending.set_result(True)
             return True
         if normalized in _DENY_KEYWORDS:
-            future.set_result(False)
+            pending.set_result(False)
             return True
         await reply_target.send("请回复「同意」或「拒绝」以完成确认。")
         return True

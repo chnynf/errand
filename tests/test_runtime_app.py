@@ -5,6 +5,7 @@ import uvicorn
 
 from errand.interfaces.web.interface import WebInterface
 from errand.contracts.interfaces import UserMessage
+from errand.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT
 from errand.runtime.app import ErrandApp
 
 
@@ -110,9 +111,14 @@ async def test_reset_command_archives_current_session() -> None:
     class Manager:
         def __init__(self):
             self.calls = []
+            self.process_calls = []
 
         async def archive(self, session_id, start_new=False, *, agent_id=None):
             self.calls.append((session_id, start_new, agent_id))
+
+        async def process(self, session_id, text, metadata=None, agent_id=None):
+            self.process_calls.append((session_id, text, metadata, agent_id))
+            return "New session started."
 
     reply = _Reply()
     manager = Manager()
@@ -125,7 +131,9 @@ async def test_reset_command_archives_current_session() -> None:
     )
 
     assert manager.calls == [("s1", True, "generalist")]
-    assert reply.messages == ["Started a new conversation."]
+    assert manager.process_calls[0][0:2] == ("s1", NEW_SESSION_PROMPT)
+    assert manager.process_calls[0][2]["suppress_usage_footer"] is True
+    assert reply.messages == ["New session started."]
 
 
 async def test_reload_command_reloads_cached_prompts() -> None:
@@ -133,6 +141,7 @@ async def test_reload_command_reloads_cached_prompts() -> None:
         def __init__(self):
             self.get_args = None
             self.reload_args = None
+            self.process_calls = []
 
         def get(self, session_id, *, agent_id=None, delegation_depth=0):
             self.get_args = (session_id, agent_id, delegation_depth)
@@ -140,6 +149,10 @@ async def test_reload_command_reloads_cached_prompts() -> None:
         def reload_prompt_resources(self, *, soul=True, profile=True):
             self.reload_args = (soul, profile)
             return 2
+
+        async def process(self, session_id, text, metadata=None, agent_id=None):
+            self.process_calls.append((session_id, text, metadata, agent_id))
+            return "Reloaded."
 
     reply = _Reply()
     manager = Manager()
@@ -153,4 +166,6 @@ async def test_reload_command_reloads_cached_prompts() -> None:
 
     assert manager.get_args == ("s1", "generalist", 0)
     assert manager.reload_args == (True, False)
-    assert reply.messages == ["Reloaded soul for 2 active session(s)."]
+    assert manager.process_calls[0][0:2] == ("s1", RELOAD_PROMPT)
+    assert manager.process_calls[0][2]["suppress_usage_footer"] is True
+    assert reply.messages == ["Reloaded."]

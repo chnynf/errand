@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from errand.config import ErrandConfig, load_errand_config
 from errand.contracts.interfaces import ErrandInterface, UserMessage
+from errand.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT, is_new_session_command
 from errand.runtime.debug import set_debug
 from errand.scheduler.service import SchedulerService
 
@@ -102,7 +103,7 @@ class ErrandApp:
         metadata["_reply_to"] = message.reply_to
         metadata["_source"] = message.source
         agent_id = metadata.get("agent_id") or self.config.default_agent
-        if await self._handle_control_command(message, agent_id):
+        if await self._handle_control_command(message, agent_id, metadata):
             return
         response = await self.session_manager.process(
             message.session_id,
@@ -112,37 +113,74 @@ class ErrandApp:
         )
         await message.reply_to.send(response)
 
-    async def _handle_control_command(self, message: UserMessage, agent_id: str) -> bool:
+    async def _handle_control_command(
+        self,
+        message: UserMessage,
+        agent_id: str,
+        metadata: dict,
+    ) -> bool:
         command = message.text.strip().lower()
-        if command in {"/new", "/reset", "archive"}:
+        if is_new_session_command(command):
             await self.session_manager.archive(
                 message.session_id,
                 start_new=True,
                 agent_id=agent_id,
             )
-            await message.reply_to.send("Started a new conversation.")
+            await self._respond_to_control(message, agent_id, metadata, NEW_SESSION_PROMPT)
             return True
 
         if not command.startswith("/reload"):
             return False
 
-        parts = command.split()
-        target = parts[1] if len(parts) > 1 else "prompts"
-        if target in {"prompts", "all"}:
-            soul = profile = True
-            label = "runtime instructions"
-        elif target == "soul":
-            soul, profile, label = True, False, "soul"
-        elif target in {"index", "profile"}:
-            soul, profile, label = False, True, "profile"
-        else:
+        reload_args = self.parse_reload_command(command)
+        if reload_args is None:
             await message.reply_to.send("Usage: /reload [soul|index|profile|prompts]")
             return True
 
-        self.session_manager.get(message.session_id, agent_id=agent_id)
-        count = self.session_manager.reload_prompt_resources(soul=soul, profile=profile)
-        await message.reply_to.send(f"Reloaded {label} for {count} active session(s).")
+        soul, profile, _ = reload_args
+        self.reload_prompt_resources(message.session_id, agent_id, soul=soul, profile=profile)
+        await self._respond_to_control(message, agent_id, metadata, RELOAD_PROMPT)
         return True
+
+    async def _respond_to_control(
+        self,
+        message: UserMessage,
+        agent_id: str,
+        metadata: dict,
+        prompt: str,
+    ) -> None:
+        control_metadata = dict(metadata)
+        control_metadata["suppress_usage_footer"] = True
+        response = await self.session_manager.process(
+            message.session_id,
+            prompt,
+            metadata=control_metadata,
+            agent_id=agent_id,
+        )
+        await message.reply_to.send(response)
+
+    def reload_prompt_resources(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        soul: bool = True,
+        profile: bool = True,
+    ) -> None:
+        self.session_manager.get(session_id, agent_id=agent_id)
+        self.session_manager.reload_prompt_resources(soul=soul, profile=profile)
+
+    @staticmethod
+    def parse_reload_command(command: str) -> tuple[bool, bool, str] | None:
+        parts = command.split()
+        target = parts[1] if len(parts) > 1 else "prompts"
+        if target in {"prompts", "all"}:
+            return True, True, "runtime instructions"
+        elif target == "soul":
+            return True, False, "soul"
+        elif target in {"index", "profile"}:
+            return False, True, "profile"
+        return None
 
     async def archive_session(self, session_id: str, start_new: bool = False) -> None:
         """Archive a session by ID."""
