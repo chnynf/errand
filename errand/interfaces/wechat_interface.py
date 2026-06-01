@@ -215,12 +215,14 @@ class WeChatReplyTarget:
                 }
             }
             try:
-                await _post(
+                data = await _post(
                     f"{self._creds['base_url']}/ilink/bot/sendmessage",
                     payload,
                     _auth_headers(self._creds),
                     timeout=10.0,
                 )
+                if data.get("ret", 0) != 0 or data.get("errcode", 0) != 0:
+                    print(f"WeChat send failed: {data}")
             except Exception as e:
                 print(f"WeChat send error: {e}")
 
@@ -432,6 +434,21 @@ class WeChatInterface:
             pending = self._pending_approvals.pop(session_id, None)
             if pending and not pending.done():
                 pending.set_result(False)
+            await self._dispatch_user_message(session_id, text, reply_target)
+            return
+
+        if await self._try_resolve_approval(session_id, text, reply_target):
+            return
+
+        await self._dispatch_user_message(session_id, text, reply_target)
+
+    async def _dispatch_user_message(
+        self,
+        session_id: str,
+        text: str,
+        reply_target: WeChatReplyTarget,
+    ) -> None:
+        try:
             await self._app.handle_user_message(
                 UserMessage(
                     session_id=session_id,
@@ -440,19 +457,8 @@ class WeChatInterface:
                     reply_to=reply_target,
                 )
             )
-            return
-
-        if await self._try_resolve_approval(session_id, text, reply_target):
-            return
-
-        await self._app.handle_user_message(
-            UserMessage(
-                session_id=session_id,
-                text=text,
-                source=self.name,
-                reply_to=reply_target,
-            )
-        )
+        except Exception as e:
+            print(f"WeChat message handling error: {e}")
 
     async def _try_resolve_approval(
         self,
