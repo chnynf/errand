@@ -144,14 +144,18 @@
                     "~/my-kb"
                 ],
                 "read": true,
-                "list": true
+                "list": true,
+                "write": false,
+                "write_approval": "ask"
             },
             "workspace": {
                 "roots": [
                     "~/my-project"
                 ],
                 "read": true,
-                "list": true
+                "list": true,
+                "write": true,
+                "write_approval": "ask"
             }
         }
     },

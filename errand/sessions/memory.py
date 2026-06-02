@@ -279,6 +279,25 @@ class Memory:
                 record["error"] = content[:preview_limit]
             return record
 
+        if result.name in ("write_file", "edit_file", "delete_file"):
+            # Keep history small: do not persist large write payloads verbatim.
+            record["params"] = {
+                key: value
+                for key, value in params.items()
+                if key not in ("content", "old_string", "new_string")
+            }
+            record["result_ref"] = {
+                "type": "file",
+                "scope": params.get("scope", "kb"),
+                "path": params.get("path"),
+            }
+            record["preview"] = content[:preview_limit]
+            return record
+
+        if result.name in ("grep_files", "find_files"):
+            record["preview"] = content[:preview_limit]
+            return record
+
         record["preview"] = (
             content
             if len(content) <= preview_limit

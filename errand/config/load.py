@@ -12,11 +12,18 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.json"
 
 @dataclass(frozen=True)
 class FileScope:
-    """A named set of filesystem permissions."""
+    """A named set of filesystem permissions.
+
+    ``write_approval`` is the mutation trust policy: ``"auto"`` lets writes
+    proceed unattended (a trusted folder), while ``"ask"`` requires human
+    approval through the runtime's reply channel.
+    """
 
     roots: list[str] = field(default_factory=list)
     read: bool = True
     list: bool = True
+    write: bool = False
+    write_approval: str = "ask"
 
 
 @dataclass(frozen=True)
@@ -37,10 +44,15 @@ class FileAccessConfig:
         for name, raw_scope in (data.get("scopes") or {}).items():
             if not isinstance(raw_scope, dict):
                 continue
+            approval = str(raw_scope.get("write_approval") or "ask").lower()
+            if approval not in ("auto", "ask"):
+                approval = "ask"
             scopes[name] = FileScope(
                 roots=list(raw_scope.get("roots") or []),
                 read=bool(raw_scope.get("read", True)),
                 list=bool(raw_scope.get("list", True)),
+                write=bool(raw_scope.get("write", False)),
+                write_approval=approval,
             )
         return cls(
             default_scope=str(data.get("default_scope") or "kb"),

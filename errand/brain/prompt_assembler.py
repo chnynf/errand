@@ -96,8 +96,10 @@ class PromptAssembler:
     def _file_access_section(self) -> str:
         lines = [
             "FILE TOOL SCOPES:",
-            "Use these scope names when calling read_file or list_dir.",
-            "Read files before quoting their contents.",
+            "Pass a scope name to the file tools: read_file, list_dir, grep_files,",
+            "find_files (read), and write_file, edit_file, delete_file (write).",
+            "Read files before quoting them. Prefer edit_file for small changes and",
+            "write_file for new files; store durable memories under the kb notes folder.",
         ]
         if self._file_access.scopes:
             lines.append(f"- DEFAULT_FILE_SCOPE: {self._file_access.default_scope}")
@@ -108,12 +110,14 @@ class PromptAssembler:
                     for permission, enabled in {
                         "read": scope.read,
                         "list": scope.list,
+                        "write": scope.write,
                     }.items()
                     if enabled
                 )
-                lines.append(
-                    f"- FILE_SCOPE {name}: roots=[{roots}], permissions=[{permissions}]"
-                )
+                detail = f"roots=[{roots}], permissions=[{permissions}]"
+                if scope.write:
+                    detail += f", write_approval={scope.write_approval}"
+                lines.append(f"- FILE_SCOPE {name}: {detail}")
         return "\n".join(lines)
 
     def _render_runtime(self) -> str:

@@ -10,7 +10,7 @@ A personal agent runtime with:
 
 - LiteLLM-backed model routing
 - native tool calling from Python tools in `errand/tools/`
-- scoped file access via `read_file` / `list_dir`
+- scoped file read/write/search (`read_file`, `list_dir`, `grep_files`, `find_files`, `write_file`, `edit_file`, `delete_file`)
 - Discord, WeChat (iLink ClawBot), CLI, scheduler, and per-session memory
 
 The durable knowledge layer lives outside this repo. The default profile is:
@@ -153,11 +153,21 @@ agent loads them on demand via `read_file` / `list_dir`.
         "kb": {
             "roots": ["~/my-kb"],
             "read": true,
-            "list": true
+            "list": true,
+            "write": true,
+            "write_approval": "auto"
         }
     }
 }
 ```
+
+Each scope has four permission knobs: `read` (gates `read_file` / `grep_files`),
+`list` (gates `list_dir` / `find_files`), `write` (gates `write_file` /
+`edit_file` / `delete_file`), and `write_approval`. The approval policy controls
+mutations: `"auto"` lets the agent write inside that folder unattended (a trusted
+scope, e.g. its own KB), while `"ask"` requires human approval through the
+runtime's reply channel and blocks the write when no channel is available. Roots
+and permissions are owned by config; the model can never expand them.
 
 `runtime.md` contains host-side include markers:
 
@@ -184,10 +194,11 @@ For on-demand reads, `read_file` and `list_dir` accept an optional
 runtime resolves `path` relative to the directory containing `base_path`
 (still confined to the configured scope roots).
 
-The model selects a scope by name when calling `read_file(path, scope=...)`
-or `list_dir(path, scope=...)` for additional task-specific KB files, SOPs,
-templates, or exact source text. Roots and permissions are owned by config; the
-model cannot expand them.
+The model selects a scope by name when calling the file tools (`read_file`,
+`list_dir`, `grep_files`, `find_files`, `write_file`, `edit_file`,
+`delete_file`) for task-specific KB files, SOPs, templates, exact source text,
+or to record durable notes/memories. Roots and permissions are owned by config;
+the model cannot expand them.
 
 Runtime tool schemas are the source of truth for directly callable Errand tools.
 KB skills may mention CLIs, APIs, MCP tools, or external services; those are
@@ -305,7 +316,7 @@ flowchart TD
 | Sessions | `errand/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
 | Agent Loop | `errand/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
 | Brain | `errand/brain/` | `Brain.decide(...)`, `Brain.submit_tool_results(...)` | Context, instruction, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
-| Tools | `errand/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, plugins like `read_file` / `list_dir` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
+| Tools | `errand/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
 | Scheduler | `errand/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
 | Config | `errand/config/` | `load_raw_config()`, `load_errand_config()` | `config.json`, env overrides | `ErrandConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
 | Contracts | `errand/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |

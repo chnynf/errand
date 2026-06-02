@@ -53,7 +53,7 @@ def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
     assert str(soul) not in prompt
     assert str(profile) not in prompt
     assert "FILE TOOL SCOPES:" in prompt
-    assert "Use these scope names when calling read_file or list_dir." in prompt
+    assert "write_file" in prompt
     assert "DEFAULT_FILE_SCOPE: kb" in prompt
     assert f"FILE_SCOPE kb: roots=[{tmp_path}]" in prompt
     assert "read_file" in prompt
