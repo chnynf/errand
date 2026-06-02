@@ -136,6 +136,105 @@ async def test_reset_command_archives_current_session() -> None:
     assert reply.messages == ["New session started."]
 
 
+class _RaisingReply:
+    async def send(self, message: str) -> None:
+        raise RuntimeError("send failed")
+
+    async def send_progress(self, message: str) -> None:
+        pass
+
+    async def request_approval(self, **kwargs) -> bool:
+        return True
+
+
+class _FallbackInterface:
+    name = "discord"
+
+    def __init__(self, *, scheduled_result: bool = True, fallback_result: bool = True):
+        self.scheduled_calls: list[tuple] = []
+        self.fallback_calls: list[tuple] = []
+        self._scheduled_result = scheduled_result
+        self._fallback_result = fallback_result
+
+    async def deliver_scheduled_result(self, task_session_id, message, context_id=None):
+        self.scheduled_calls.append((task_session_id, message, context_id))
+        return self._scheduled_result
+
+    async def deliver_fallback_message(self, message, context_id=None):
+        self.fallback_calls.append((message, context_id))
+        return self._fallback_result
+
+
+def _app_with_interfaces(interfaces) -> ErrandApp:
+    app = object.__new__(ErrandApp)
+    app._interfaces = interfaces
+    return app
+
+
+async def test_send_final_success_skips_fallback() -> None:
+    fb = _FallbackInterface()
+    app = _app_with_interfaces([fb])
+    reply = _Reply()
+
+    result = await app._send_final(reply, "hi", source="wechat", context_id="wechat:1")
+
+    assert result is True
+    assert reply.messages == ["hi"]
+    assert fb.fallback_calls == []
+
+
+async def test_send_final_failure_routes_to_fallback() -> None:
+    fb = _FallbackInterface()
+    app = _app_with_interfaces([fb])
+
+    result = await app._send_final(
+        _RaisingReply(), "hi", source="wechat", context_id="wechat:1"
+    )
+
+    assert result is True
+    assert len(fb.fallback_calls) == 1
+    text, context_id = fb.fallback_calls[0]
+    assert "I tried to reach you on wechat" in text
+    assert "hi" in text
+    assert context_id == "wechat:1"
+
+
+async def test_scheduled_origin_success_skips_fallback() -> None:
+    fb = _FallbackInterface(scheduled_result=True)
+    app = _app_with_interfaces([fb])
+
+    result = await app.deliver_scheduled_result("scheduled:job-1", "do it", context_id="123")
+
+    assert result is True
+    assert fb.fallback_calls == []
+
+
+async def test_scheduled_origin_failure_routes_to_fallback() -> None:
+    fb = _FallbackInterface(scheduled_result=False)
+    app = _app_with_interfaces([fb])
+
+    result = await app.deliver_scheduled_result(
+        "scheduled:job-1", "do it", context_id="wechat:42"
+    )
+
+    assert result is True
+    assert len(fb.fallback_calls) == 1
+    text, _ = fb.fallback_calls[0]
+    assert "I tried to reach you on wechat" in text
+    assert "do it" in text
+
+
+async def test_fallback_failure_returns_false() -> None:
+    fb = _FallbackInterface(fallback_result=False)
+    app = _app_with_interfaces([fb])
+
+    result = await app._send_final(
+        _RaisingReply(), "hi", source="wechat", context_id="wechat:1"
+    )
+
+    assert result is False
+
+
 async def test_reload_command_reloads_cached_prompts() -> None:
     class Manager:
         def __init__(self):

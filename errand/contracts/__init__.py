@@ -15,6 +15,7 @@ from errand.contracts.types import (
 from errand.contracts.interfaces import (
     ReplyTarget,
     ScheduledDelivery,
+    FallbackDelivery,
     ErrandInterface,
     UserMessage,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "ToolResult",
     "ReplyTarget",
     "ScheduledDelivery",
+    "FallbackDelivery",
     "ErrandInterface",
     "UserMessage",
 ]

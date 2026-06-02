@@ -56,3 +56,20 @@ class ScheduledDelivery(Protocol):
         context_id: str | None = None,
     ) -> bool:
         """Deliver a scheduled job result. Return True if handled."""
+
+
+class FallbackDelivery(Protocol):
+    """Interface capability for last-resort delivery of undeliverable messages.
+
+    Used when a final message cannot be sent through its original interface
+    (the origin is down, cannot receive proactive messages, etc.). An
+    interface implementing this routes the message to a standing fallback
+    destination so the user is not silently dropped.
+    """
+
+    async def deliver_fallback_message(
+        self,
+        message: str,
+        context_id: str | None = None,
+    ) -> bool:
+        """Deliver a fallback message. Return True if handled."""

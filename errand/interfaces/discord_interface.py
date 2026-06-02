@@ -20,6 +20,7 @@ _DISCORD_MAX_LEN = 2000
 _MAPPING_FILE = Path(__file__).resolve().parent / "discord_session_mapping.json"
 _DISCORD_RETRY_SECONDS = 5
 _DISCORD_MAX_RETRY_SECONDS = 60
+_FALLBACK_CHANNEL_NAME = "fallback-messages"
 
 
 def _proxy_from_env() -> str | None:
@@ -307,6 +308,75 @@ class DiscordInterface:
         except discord.DiscordException as e:
             print(f"Scheduler delivery error: {e}")
             return False
+
+    async def deliver_fallback_message(
+        self,
+        message: str,
+        context_id: str | None = None,
+    ) -> bool:
+        """Post a message to the standing fallback channel.
+
+        Used when a message could not be delivered through its original
+        interface. Picks a guild from the failed origin context when possible,
+        otherwise the sole connected guild, then sends to a text channel named
+        ``fallback-messages`` (creating it if needed).
+        """
+        guild = self._fallback_guild(context_id)
+        if guild is None:
+            return False
+
+        channel = await self._get_or_create_fallback_channel(guild)
+        if channel is None:
+            return False
+
+        try:
+            await DiscordReplyTarget(channel).send(message)
+            return True
+        except discord.DiscordException as e:
+            print(f"Fallback delivery error: {e}")
+            return False
+
+    def _fallback_guild(self, context_id: str | None):
+        """Resolve the guild for fallback delivery, or None if ambiguous."""
+        guild = self._guild_from_context(context_id)
+        if guild is not None:
+            return guild
+
+        guilds = list(self._client.guilds)
+        if len(guilds) == 1:
+            return guilds[0]
+        if not guilds:
+            print("Fallback delivery: bot is not connected to any guild.")
+            return None
+        print(
+            "Fallback delivery: multiple guilds connected and context "
+            f"{context_id!r} did not identify one; cannot choose a guild."
+        )
+        return None
+
+    def _guild_from_context(self, context_id: str | None):
+        """Return the guild for a Discord channel-id context, else None (quiet)."""
+        try:
+            channel = self._client.get_channel(int(context_id))
+        except (TypeError, ValueError):
+            return None
+        if isinstance(channel, discord.TextChannel) and channel.guild:
+            return channel.guild
+        return None
+
+    async def _get_or_create_fallback_channel(self, guild):
+        channel = discord.utils.get(guild.text_channels, name=_FALLBACK_CHANNEL_NAME)
+        if channel is not None:
+            return channel
+        try:
+            return await guild.create_text_channel(
+                _FALLBACK_CHANNEL_NAME,
+                topic="Errand messages that could not be delivered to their original channel.",
+                reason="Errand fallback delivery",
+            )
+        except discord.DiscordException as e:
+            print(f"Fallback delivery: failed to create #{_FALLBACK_CHANNEL_NAME}: {e}")
+            return None
 
     def _session_id_for_channel(self, channel_id: int) -> str:
         for session_id, entry in self._mapping.items():

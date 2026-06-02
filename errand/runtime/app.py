@@ -111,7 +111,12 @@ class ErrandApp:
             metadata=metadata,
             agent_id=agent_id,
         )
-        await message.reply_to.send(response)
+        await self._send_final(
+            message.reply_to,
+            response,
+            source=message.source,
+            context_id=message.session_id,
+        )
 
     async def _handle_control_command(
         self,
@@ -157,7 +162,12 @@ class ErrandApp:
             metadata=control_metadata,
             agent_id=agent_id,
         )
-        await message.reply_to.send(response)
+        await self._send_final(
+            message.reply_to,
+            response,
+            source=message.source,
+            context_id=message.session_id,
+        )
 
     def reload_prompt_resources(
         self,
@@ -201,7 +211,7 @@ class ErrandApp:
         message: str,
         context_id: str | None = None,
     ) -> bool:
-        """Ask interfaces to deliver a scheduled result."""
+        """Deliver a scheduled result to its origin, falling back on failure."""
         for interface in self._interfaces:
             deliver = getattr(interface, "deliver_scheduled_result", None)
             if not deliver:
@@ -209,7 +219,64 @@ class ErrandApp:
             handled = await deliver(task_session_id, message, context_id=context_id)
             if handled:
                 return True
+        return await self._send_fallback(
+            self._source_label(context_id),
+            message,
+            context_id=context_id,
+        )
+
+    async def _send_final(
+        self,
+        reply_to,
+        message: str,
+        *,
+        source: str,
+        context_id: str | None = None,
+    ) -> bool:
+        """Send a final user-visible message, falling back to Discord on failure."""
+        try:
+            await reply_to.send(message)
+            return True
+        except Exception as e:
+            print(f"Send failed via {source}: {e}")
+            return await self._send_fallback(source, message, context_id=context_id)
+
+    async def _send_fallback(
+        self,
+        source: str,
+        message: str,
+        *,
+        context_id: str | None = None,
+    ) -> bool:
+        """Route an undeliverable message to a fallback-capable interface."""
+        text = (
+            f"I tried to reach you on {source}, but couldn't send the message. "
+            f"Here's the message: {message}"
+        )
+        for interface in self._interfaces:
+            deliver = getattr(interface, "deliver_fallback_message", None)
+            if not deliver:
+                continue
+            try:
+                if await deliver(text, context_id=context_id):
+                    return True
+            except Exception as e:
+                print(f"Fallback delivery error via {interface.name}: {e}")
+        print(f"Fallback delivery failed: no interface delivered message from {source}")
         return False
+
+    @staticmethod
+    def _source_label(context_id: str | None) -> str:
+        """Best-effort human label for the origin a message could not reach."""
+        if not context_id:
+            return "your original channel"
+        if ":" in context_id:
+            return context_id.split(":", 1)[0]
+        if context_id == "cli_session":
+            return "cli"
+        if str(context_id).isdigit():
+            return "discord"
+        return context_id
 
     def _build_interfaces(self, names: list[str]) -> list[ErrandInterface]:
         interfaces: list[ErrandInterface] = []
