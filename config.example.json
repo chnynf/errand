@@ -145,7 +145,7 @@
                 ],
                 "read": true,
                 "list": true,
-                "write": false,
+                "write": true,
                 "write_approval": "ask"
             },
             "workspace": {
