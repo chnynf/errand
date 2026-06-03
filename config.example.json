@@ -140,22 +140,31 @@
         "default_scope": "kb",
         "scopes": {
             "kb": {
-                "roots": [
-                    "~/my-kb"
-                ],
-                "read": true,
-                "list": true,
-                "write": true,
-                "write_approval": "ask"
+                "roots": ["~/my-kb"],
+                "read":   true,
+                "list":   true,
+                "write":  "ask",
+                "append": "ask",
+                "edit":   "ask",
+                "delete": "ask"
+            },
+            "notes": {
+                "roots": ["~/my-kb/notes"],
+                "read":   true,
+                "list":   true,
+                "write":  "ask",
+                "append": true,
+                "edit":   "ask",
+                "delete": "ask"
             },
             "workspace": {
-                "roots": [
-                    "~/my-project"
-                ],
-                "read": true,
-                "list": true,
-                "write": true,
-                "write_approval": "ask"
+                "roots": ["~/my-project"],
+                "read":   true,
+                "list":   true,
+                "write":  "ask",
+                "append": true,
+                "edit":   "ask",
+                "delete": "ask"
             }
         }
     },

@@ -2,23 +2,27 @@
 
 This single module is the local equivalent of an MCP file server. Public
 module-level functions are auto-discovered as tools; private ``_``-prefixed
-helpers handle scope confinement and write approval.
+helpers handle scope confinement and operation authorization.
 
 Security model
 --------------
-The model selects a *scope* by name. Each scope's roots and permissions live
-in ``config.json`` under ``file_access`` and cannot be expanded by the model.
+The model selects a *scope* by name. Each scope's roots and per-operation
+permissions live in ``config.json`` under ``file_access`` and cannot be
+expanded by the model.
 
-- ``read``  gates ``read_file`` and ``grep_files``.
-- ``list``  gates ``list_dir`` and ``find_files``.
-- ``write`` gates all mutations (``write_file``, ``edit_file``, ``delete_file``).
+Each operation has its own permission field (``True`` / ``False`` / ``"ask"``):
 
-Mutations additionally honor a per-scope ``write_approval`` policy:
+- ``read``   gates ``read_file`` and ``grep_files``.
+- ``list``   gates ``list_dir`` and ``find_files``.
+- ``write``  gates ``write_file`` (full create or overwrite).
+- ``append`` gates ``append_file`` (add-only, never overwrites).
+- ``edit``   gates ``edit_file`` (surgical string replace).
+- ``delete`` gates ``delete_file``.
 
-- ``"auto"`` proceeds unattended (a "trusted folder"; ideal for the agent's
-  own KB and scheduled background writes).
-- ``"ask"`` requires human approval through the ``reply_to`` channel; if no
-  approval channel is available, the mutation is blocked rather than applied.
+``True``  — always allow, no prompt.
+``False`` — always block, returns an error.
+``"ask"`` — require human approval through the ``reply_to`` channel; if no
+            channel is available the operation is blocked rather than applied.
 """
 
 from __future__ import annotations
@@ -90,34 +94,37 @@ def _located(path: str, roots: list[Path], scope_name: str, *, base_path: str | 
     return target
 
 
-async def _authorize_write(
+async def _authorize_op(
+    perm: bool | str,
     scope_name: str,
-    file_scope: FileScope,
     context: dict[str, Any] | None,
     *,
-    action: str,
+    operation: str,
     detail: str,
 ) -> str | None:
-    """Return a user-facing message if the mutation is blocked, else ``None``."""
-    if not file_scope.write:
-        return f"Error: writes are disabled for file scope '{scope_name}'."
-    if file_scope.write_approval == "auto":
-        return None
+    """Return a user-facing block message, or ``None`` if the operation is allowed.
 
+    ``perm`` is the per-operation permission from ``FileScope``:
+    ``True`` → proceed; ``False`` → block; ``"ask"`` → prompt for approval.
+    """
+    if perm is True:
+        return None
+    if perm is False:
+        return f"Error: '{operation}' is not permitted in file scope '{scope_name}'."
+    # "ask" — route through the reply channel
     reply_to = (context or {}).get("reply_to")
     if reply_to is None or not hasattr(reply_to, "request_approval"):
         return (
-            f"Error: scope '{scope_name}' requires approval to {action}, but no "
-            "approval channel is available. Set write_approval to 'auto' for this "
-            "scope to allow unattended writes."
+            f"Error: scope '{scope_name}' requires approval to {operation}, "
+            "but no approval channel is available."
         )
     approved = await reply_to.request_approval(
-        title=f"File {action} in scope '{scope_name}'",
+        title=f"File {operation} in scope '{scope_name}'",
         details=detail,
         timeout_seconds=300,
     )
     if not approved:
-        return f"The {action} was not approved, so no changes were made.\n{detail}"
+        return f"The {operation} was not approved, so no changes were made.\n{detail}"
     return None
 
 
@@ -137,8 +144,8 @@ def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
     """
     try:
         name, file_scope, roots = _scope(scope)
-        if not file_scope.read:
-            raise PermissionError(f"Read is disabled for file scope '{name}'.")
+        if file_scope.read is False:
+            raise PermissionError(f"'read' is not permitted in file scope '{name}'.")
         target = _located(path, roots, name, base_path=base_path or None)
         if not target.is_file():
             raise FileNotFoundError(f"Not a file: {target}")
@@ -165,8 +172,8 @@ def list_dir(path: str = "", scope: str = "kb", base_path: str = "") -> str:
     """
     try:
         name, file_scope, roots = _scope(scope)
-        if not file_scope.list:
-            raise PermissionError(f"List is disabled for file scope '{name}'.")
+        if file_scope.list is False:
+            raise PermissionError(f"'list' is not permitted in file scope '{name}'.")
         target = _located(path, roots, name, base_path=base_path or None) if path else roots[0]
         if not target.is_dir():
             raise NotADirectoryError(f"Not a directory: {target}")
@@ -209,11 +216,12 @@ async def write_file(
         data = content.encode("utf-8")
         if len(data) > MAX_WRITE_BYTES:
             raise ValueError(f"Content too large ({len(data)} bytes > {MAX_WRITE_BYTES}).")
-        action = "overwrite file" if target.exists() else "create file"
-        blocked = await _authorize_write(
-            name, file_scope, _context,
-            action=action,
-            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}",
+        action = "overwrite" if target.exists() else "create"
+        preview = content[:200].replace("\n", "↵")
+        blocked = await _authorize_op(
+            file_scope.write, name, _context,
+            operation=f"{action} file",
+            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
         )
         if blocked:
             return blocked
@@ -222,6 +230,52 @@ async def write_file(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return f"Wrote {len(data)} bytes to {target}."
+    except _FS_ERRORS as exc:
+        return f"Error: {exc}"
+
+
+async def append_file(
+    path: str,
+    content: str,
+    scope: str = "kb",
+    _context: dict[str, Any] | None = None,
+) -> str:
+    """Append text to a file; creates it if it does not exist. Never overwrites.
+
+    Use for adding new notes, memories, or log entries to existing files without
+    touching their current content. To make targeted changes to existing content
+    use ``edit_file``; to replace a file wholesale use ``write_file``.
+
+    Args:
+        path: File path inside the scope.
+        content: UTF-8 text to append.
+        scope: Configured file scope. Defaults to ``kb``.
+
+    Returns: A status line, or an ``Error: ...`` / not-approved message.
+    """
+    try:
+        name, file_scope, roots = _scope(scope)
+        target = _located(path, roots, name)
+        if target.is_dir():
+            raise IsADirectoryError(f"Path is a directory: {target}")
+        data = content.encode("utf-8")
+        if len(data) > MAX_WRITE_BYTES:
+            raise ValueError(f"Content too large ({len(data)} bytes > {MAX_WRITE_BYTES}).")
+        action = "append to" if target.exists() else "create and append to"
+        preview = content[:200].replace("\n", "↵")
+        blocked = await _authorize_op(
+            file_scope.append, name, _context,
+            operation="append to file",
+            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
+        )
+        if blocked:
+            return blocked
+        if not _within_roots(target.parent, roots):
+            raise PermissionError(f"Parent directory not within file scope '{name}': {target.parent}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(content)
+        return f"Appended {len(data)} bytes to {target}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -270,10 +324,15 @@ async def edit_file(
             if replace_all
             else original.replace(old_string, new_string, 1)
         )
-        blocked = await _authorize_write(
-            name, file_scope, _context,
-            action="edit file",
-            detail=f"Scope: {name}\nPath: {target}\nReplacements: {replacements}",
+        old_snippet = old_string[:200].replace("\n", "↵")
+        new_snippet = new_string[:200].replace("\n", "↵")
+        blocked = await _authorize_op(
+            file_scope.edit, name, _context,
+            operation="edit file",
+            detail=(
+                f"Scope: {name}\nPath: {target}\nReplacements: {replacements}\n"
+                f"From: {old_snippet}\nTo:   {new_snippet}"
+            ),
         )
         if blocked:
             return blocked
@@ -310,9 +369,9 @@ async def delete_file(
         if is_dir and any(target.iterdir()):
             raise OSError(f"Directory not empty: {target}")
         kind = "directory" if is_dir else "file"
-        blocked = await _authorize_write(
-            name, file_scope, _context,
-            action=f"delete {kind}",
+        blocked = await _authorize_op(
+            file_scope.delete, name, _context,
+            operation=f"delete {kind}",
             detail=f"Scope: {name}\nPath: {target}",
         )
         if blocked:
@@ -338,8 +397,8 @@ def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*")
     """
     try:
         name, file_scope, roots = _scope(scope)
-        if not file_scope.read:
-            raise PermissionError(f"Read is disabled for file scope '{name}'.")
+        if file_scope.read is False:
+            raise PermissionError(f"'read' is not permitted in file scope '{name}'.")
         try:
             regex = re.compile(pattern)
         except re.error as exc:
@@ -395,8 +454,8 @@ def find_files(glob_pattern: str, scope: str = "kb", path: str = "") -> str:
     """
     try:
         name, file_scope, roots = _scope(scope)
-        if not file_scope.list:
-            raise PermissionError(f"List is disabled for file scope '{name}'.")
+        if file_scope.list is False:
+            raise PermissionError(f"'list' is not permitted in file scope '{name}'.")
         base = _located(path, roots, name) if path else roots[0]
         if not base.is_dir():
             raise NotADirectoryError(f"Not a directory: {base}")

@@ -10,29 +10,52 @@ from pathlib import Path
 CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.json"
 
 
+def _parse_perm(raw: object) -> bool | str:
+    """Parse a permission value into True, False, or ``"ask"``."""
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).lower()
+    if s == "ask":
+        return "ask"
+    if s in ("true", "1", "yes"):
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class FileScope:
-    """A named set of filesystem permissions.
+    """Per-operation filesystem permissions.
 
-    ``write_approval`` is the mutation trust policy: ``"auto"`` lets writes
-    proceed unattended (a trusted folder), while ``"ask"`` requires human
-    approval through the runtime's reply channel.
+    Each field controls one file operation and takes one of three values:
+
+    - ``True``   — always allow, no prompt required.
+    - ``False``  — always block, returns an error.
+    - ``"ask"``  — require human approval through the runtime's reply channel;
+                   if no channel is available the operation is blocked.
+
+    ``read``   gates ``read_file`` and ``grep_files``.
+    ``list``   gates ``list_dir`` and ``find_files``.
+    ``write``  gates ``write_file`` (full create or overwrite).
+    ``append`` gates ``append_file`` (add-only, never overwrites).
+    ``edit``   gates ``edit_file`` (surgical string replace).
+    ``delete`` gates ``delete_file``.
     """
 
-    roots: list[str] = field(default_factory=list)
-    read: bool = True
-    list: bool = True
-    write: bool = False
-    write_approval: str = "ask"
+    roots:  list[str] = field(default_factory=list)
+    read:   bool | str = True
+    list:   bool | str = True
+    write:  bool | str = False
+    append: bool | str = False
+    edit:   bool | str = False
+    delete: bool | str = "ask"
 
 
 @dataclass(frozen=True)
 class FileAccessConfig:
     """Runtime-controlled file access policy.
 
-    The model selects a scope by name when calling ``read_file`` or
-    ``list_dir``. The roots and permissions for each scope are owned
-    by config; the model cannot expand them.
+    The model selects a scope by name when calling file tools. Scope roots
+    and permissions are owned by config; the model cannot expand them.
     """
 
     default_scope: str = "kb"
@@ -44,20 +67,28 @@ class FileAccessConfig:
         for name, raw_scope in (data.get("scopes") or {}).items():
             if not isinstance(raw_scope, dict):
                 continue
-            approval = str(raw_scope.get("write_approval") or "ask").lower()
-            if approval not in ("auto", "ask"):
-                approval = "ask"
-            scopes[name] = FileScope(
-                roots=list(raw_scope.get("roots") or []),
-                read=bool(raw_scope.get("read", True)),
-                list=bool(raw_scope.get("list", True)),
-                write=bool(raw_scope.get("write", False)),
-                write_approval=approval,
-            )
+            scopes[name] = _parse_file_scope(raw_scope)
         return cls(
             default_scope=str(data.get("default_scope") or "kb"),
             scopes=scopes,
         )
+
+
+def _parse_file_scope(raw: dict) -> FileScope:
+    """Parse a scope config dict into a FileScope."""
+    def p(key: str, default: bool | str) -> bool | str:
+        val = raw.get(key)
+        return _parse_perm(val) if val is not None else default
+
+    return FileScope(
+        roots=list(raw.get("roots") or []),
+        read=p("read",   True),
+        list=p("list",   True),
+        write=p("write",  False),
+        append=p("append", False),
+        edit=p("edit",   False),
+        delete=p("delete", "ask"),
+    )
 
 
 @dataclass(frozen=True)

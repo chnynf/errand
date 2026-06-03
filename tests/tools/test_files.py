@@ -1,7 +1,7 @@
 """Tests for the scoped file-system tools in ``errand.tools.files``.
 
-Covers scope/permission enforcement, every file operation, the write-approval
-policy, and session-memory compaction of large write payloads.
+Covers scope/permission enforcement, every file operation, the per-operation
+approval policy, and session-memory compaction of large write payloads.
 """
 
 from pathlib import Path
@@ -15,10 +15,17 @@ from errand.tools import files as ft
 
 
 def _patch_scope(monkeypatch, root: Path, **scope_kwargs) -> None:
-    scope_kwargs.setdefault("read", True)
-    scope_kwargs.setdefault("list", True)
-    scope_kwargs.setdefault("write", True)
-    scope_kwargs.setdefault("write_approval", "auto")
+    """Patch the file-access config with a single 'kb' scope.
+
+    Defaults to fully permissive (all operations True). Pass keyword arguments
+    matching ``FileScope`` fields to override individual permissions.
+    """
+    scope_kwargs.setdefault("read",   True)
+    scope_kwargs.setdefault("list",   True)
+    scope_kwargs.setdefault("write",  True)
+    scope_kwargs.setdefault("append", True)
+    scope_kwargs.setdefault("edit",   True)
+    scope_kwargs.setdefault("delete", True)
     config = ErrandConfig(
         file_access=FileAccessConfig(
             default_scope="kb",
@@ -73,21 +80,45 @@ def test_read_disabled_scope_rejected(tmp_path: Path, monkeypatch):
     root.mkdir()
     (root / "INDEX.md").write_text("x", encoding="utf-8")
     _patch_scope(monkeypatch, root, read=False)
-    assert "Read is disabled" in ft.read_file("INDEX.md")
+    assert "not permitted" in ft.read_file("INDEX.md")
 
 
 def test_list_disabled_scope_rejected(tmp_path: Path, monkeypatch):
     root = tmp_path / "kb"
     root.mkdir()
     _patch_scope(monkeypatch, root, list=False)
-    assert "List is disabled" in ft.list_dir("")
+    assert "not permitted" in ft.list_dir("")
 
 
 async def test_write_disabled_scope_rejected(tmp_path: Path, monkeypatch):
     root = tmp_path / "kb"
     root.mkdir()
     _patch_scope(monkeypatch, root, write=False)
-    assert "writes are disabled" in await ft.write_file("x.md", "hi")
+    assert "not permitted" in await ft.write_file("x.md", "hi")
+
+
+async def test_append_disabled_scope_rejected(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    _patch_scope(monkeypatch, root, append=False)
+    assert "not permitted" in await ft.append_file("x.md", "hi")
+
+
+async def test_edit_disabled_scope_rejected(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("hello", encoding="utf-8")
+    _patch_scope(monkeypatch, root, edit=False)
+    assert "not permitted" in await ft.edit_file("x.md", "hello", "world")
+
+
+async def test_delete_disabled_scope_rejected(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("bye", encoding="utf-8")
+    _patch_scope(monkeypatch, root, delete=False)
+    assert "not permitted" in await ft.delete_file("x.md")
+    assert (root / "x.md").exists()
 
 
 async def test_write_cannot_escape_root(kb: Path):
@@ -109,6 +140,26 @@ def test_list_dir_marks_dirs_and_hides_dotfiles(kb: Path):
     assert "INDEX.md" in entries
     assert "notes/" in entries
     assert ".hidden" not in entries
+
+
+# --- append --------------------------------------------------------------------
+
+async def test_append_creates_file(kb: Path):
+    out = await ft.append_file("notes/new.md", "first line\n")
+    assert out.startswith("Appended")
+    assert (kb / "notes" / "new.md").read_text(encoding="utf-8") == "first line\n"
+
+
+async def test_append_adds_to_existing_without_overwriting(kb: Path):
+    (kb / "notes" / "log.md").write_text("original\n", encoding="utf-8")
+    out = await ft.append_file("notes/log.md", "added\n")
+    assert out.startswith("Appended")
+    content = (kb / "notes" / "log.md").read_text(encoding="utf-8")
+    assert content == "original\nadded\n"
+
+
+async def test_append_cannot_escape_root(kb: Path):
+    assert (await ft.append_file("../escape.md", "x")).startswith("Error:")
 
 
 # --- write / edit / delete -----------------------------------------------------
@@ -200,19 +251,19 @@ def test_find_files_by_glob(kb: Path):
 
 # --- approval policy -----------------------------------------------------------
 
-async def test_ask_policy_blocks_without_channel(tmp_path: Path, monkeypatch):
+async def test_ask_write_blocks_without_channel(tmp_path: Path, monkeypatch):
     root = tmp_path / "kb"
     root.mkdir()
-    _patch_scope(monkeypatch, root, write_approval="ask")
+    _patch_scope(monkeypatch, root, write="ask")
     out = await ft.write_file("x.md", "hi", _context={})
     assert "requires approval" in out
     assert not (root / "x.md").exists()
 
 
-async def test_ask_policy_proceeds_when_approved(tmp_path: Path, monkeypatch):
+async def test_ask_write_proceeds_when_approved(tmp_path: Path, monkeypatch):
     root = tmp_path / "kb"
     root.mkdir()
-    _patch_scope(monkeypatch, root, write_approval="ask")
+    _patch_scope(monkeypatch, root, write="ask")
     approver = _Approver(answer=True)
     out = await ft.write_file("x.md", "hi", _context={"reply_to": approver})
     assert out.startswith("Wrote")
@@ -220,14 +271,94 @@ async def test_ask_policy_proceeds_when_approved(tmp_path: Path, monkeypatch):
     assert approver.calls
 
 
-async def test_ask_policy_denied_leaves_file_untouched(tmp_path: Path, monkeypatch):
+async def test_ask_write_denied_leaves_file_untouched(tmp_path: Path, monkeypatch):
     root = tmp_path / "kb"
     root.mkdir()
-    _patch_scope(monkeypatch, root, write_approval="ask")
+    _patch_scope(monkeypatch, root, write="ask")
     approver = _Approver(answer=False)
     out = await ft.write_file("x.md", "hi", _context={"reply_to": approver})
     assert "not approved" in out
     assert not (root / "x.md").exists()
+
+
+async def test_ask_append_blocks_without_channel(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    _patch_scope(monkeypatch, root, append="ask")
+    out = await ft.append_file("x.md", "hi", _context={})
+    assert "requires approval" in out
+    assert not (root / "x.md").exists()
+
+
+async def test_ask_append_proceeds_when_approved(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    _patch_scope(monkeypatch, root, append="ask")
+    approver = _Approver(answer=True)
+    out = await ft.append_file("x.md", "hi", _context={"reply_to": approver})
+    assert out.startswith("Appended")
+    assert (root / "x.md").read_text(encoding="utf-8") == "hi"
+
+
+async def test_ask_edit_blocks_without_channel(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("hello", encoding="utf-8")
+    _patch_scope(monkeypatch, root, edit="ask")
+    out = await ft.edit_file("x.md", "hello", "world", _context={})
+    assert "requires approval" in out
+    assert (root / "x.md").read_text(encoding="utf-8") == "hello"
+
+
+async def test_ask_edit_proceeds_when_approved(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("hello", encoding="utf-8")
+    _patch_scope(monkeypatch, root, edit="ask")
+    approver = _Approver(answer=True)
+    out = await ft.edit_file("x.md", "hello", "world", _context={"reply_to": approver})
+    assert "Replaced 1 occurrence" in out
+    assert (root / "x.md").read_text(encoding="utf-8") == "world"
+    assert approver.calls
+
+
+async def test_ask_delete_blocks_without_channel(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("bye", encoding="utf-8")
+    _patch_scope(monkeypatch, root, delete="ask")
+    out = await ft.delete_file("x.md", _context={})
+    assert "requires approval" in out
+    assert (root / "x.md").exists()
+
+
+async def test_ask_delete_proceeds_when_approved(tmp_path: Path, monkeypatch):
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("bye", encoding="utf-8")
+    _patch_scope(monkeypatch, root, delete="ask")
+    approver = _Approver(answer=True)
+    out = await ft.delete_file("x.md", _context={"reply_to": approver})
+    assert out.startswith("Deleted file")
+    assert not (root / "x.md").exists()
+
+
+async def test_per_op_permissions_are_independent(tmp_path: Path, monkeypatch):
+    """append:True should not grant write or edit."""
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "x.md").write_text("original", encoding="utf-8")
+    _patch_scope(monkeypatch, root, write=False, append=True, edit=False)
+    # append allowed
+    out = await ft.append_file("x.md", " appended")
+    assert out.startswith("Appended")
+    # write blocked
+    assert "not permitted" in await ft.write_file("x.md", "replaced")
+    # edit blocked
+    assert "not permitted" in await ft.edit_file("x.md", "original", "changed")
+    # file content unchanged from write/edit attempts
+    content = (root / "x.md").read_text(encoding="utf-8")
+    assert content == "original appended"
 
 
 # --- session memory compaction -------------------------------------------------
