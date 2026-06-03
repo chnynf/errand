@@ -154,20 +154,20 @@ agent loads them on demand via `read_file` / `list_dir`.
             "roots": ["~/my-kb"],
             "read": true,
             "list": true,
-            "write": true,
-            "write_approval": "auto"
+            "write": "ask",
+            "append": "ask",
+            "edit": "ask",
+            "delete": "ask"
         }
     }
 }
 ```
 
-Each scope has four permission knobs: `read` (gates `read_file` / `grep_files`),
-`list` (gates `list_dir` / `find_files`), `write` (gates `write_file` /
-`edit_file` / `delete_file`), and `write_approval`. The approval policy controls
-mutations: `"auto"` lets the agent write inside that folder unattended (a trusted
-scope, e.g. its own KB), while `"ask"` requires human approval through the
-runtime's reply channel and blocks the write when no channel is available. Roots
-and permissions are owned by config; the model can never expand them.
+Each scope has per-operation permission fields: `read`, `list`, `write`, `append`,
+`edit`, `delete`. Each takes one of three values: `true` (always allow), `false`
+(always block), or `"ask"` (require human approval through the runtime's reply
+channel; blocked when no channel is available). Roots and permissions are owned by
+config; the model can never expand them.
 
 `runtime.md` contains host-side include markers:
 

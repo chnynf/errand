@@ -96,28 +96,27 @@ class PromptAssembler:
     def _file_access_section(self) -> str:
         lines = [
             "FILE TOOL SCOPES:",
-            "Pass a scope name to the file tools: read_file, list_dir, grep_files,",
-            "find_files (read), and write_file, edit_file, delete_file (write).",
-            "Read files before quoting them. Prefer edit_file for small changes and",
-            "write_file for new files; store durable memories under the kb notes folder.",
+            "Pass a scope name to the file tools. Each scope lists per-operation",
+            "permissions: true=allow, false=block, ask=requires approval.",
+            "Tools: read_file, list_dir, grep_files, find_files, write_file,",
+            "append_file, edit_file, delete_file.",
+            "Read files before quoting them. Use append_file to add new notes;",
+            "edit_file for targeted updates; write_file only for new or replacement files.",
         ]
         if self._file_access.scopes:
             lines.append(f"- DEFAULT_FILE_SCOPE: {self._file_access.default_scope}")
             for name, scope in sorted(self._file_access.scopes.items()):
                 roots = ", ".join(scope.roots)
-                permissions = ", ".join(
-                    permission
-                    for permission, enabled in {
-                        "read": scope.read,
-                        "list": scope.list,
-                        "write": scope.write,
-                    }.items()
-                    if enabled
-                )
-                detail = f"roots=[{roots}], permissions=[{permissions}]"
-                if scope.write:
-                    detail += f", write_approval={scope.write_approval}"
-                lines.append(f"- FILE_SCOPE {name}: {detail}")
+                ops = {
+                    "read":   scope.read,
+                    "list":   scope.list,
+                    "write":  scope.write,
+                    "append": scope.append,
+                    "edit":   scope.edit,
+                    "delete": scope.delete,
+                }
+                perm_str = ", ".join(f"{op}={val}" for op, val in ops.items())
+                lines.append(f"- FILE_SCOPE {name}: roots=[{roots}], ops=[{perm_str}]")
         return "\n".join(lines)
 
     def _render_runtime(self) -> str:
