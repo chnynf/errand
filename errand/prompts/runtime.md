@@ -8,6 +8,10 @@ Behavior, principles, and role-specific guidance are included below.
 
 {{ include:SHARED_SOUL }}
 
+## Shared notes
+
+{{ include:SHARED_NOTES_INDEX }}
+
 ## Agent profile
 
 {{ include:AGENT_PROFILE }}

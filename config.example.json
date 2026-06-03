@@ -70,6 +70,7 @@
     },
 
     "shared_soul": "~/my-kb/SOUL.md",
+    "shared_notes_index": "~/my-kb/notes/INDEX.md",
     "agent_profile": "~/my-kb/generalist/INDEX.md",
 
     "default_agent": "generalist",

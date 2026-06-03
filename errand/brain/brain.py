@@ -49,6 +49,7 @@ class Brain:
             "model_strategy": config.model_strategy,
             "retry": config.retry,
             "shared_soul": config.shared_soul,
+            "shared_notes_index": config.shared_notes_index,
             "agent_profile": config.agent_profile,
             "file_access": {
                 "default_scope": config.file_access.default_scope,
@@ -86,6 +87,7 @@ class Brain:
                 if agent_spec and agent_spec.agent_profile is not None
                 else raw_config.get("agent_profile")
             ),
+            shared_notes_index=raw_config.get("shared_notes_index"),
             file_access=(
                 config.file_access
                 if config is not None

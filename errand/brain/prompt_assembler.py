@@ -20,6 +20,7 @@ from errand.config import FileAccessConfig
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 SHARED_SOUL_INCLUDE = "{{ include:SHARED_SOUL }}"
+SHARED_NOTES_INDEX_INCLUDE = "{{ include:SHARED_NOTES_INDEX }}"
 AGENT_PROFILE_INCLUDE = "{{ include:AGENT_PROFILE }}"
 
 
@@ -52,19 +53,27 @@ class PromptAssembler:
         shared_soul: Optional[str] = None,
         agent_profile: Optional[str] = None,
         file_access: Optional[FileAccessConfig] = None,
+        shared_notes_index: Optional[str] = None,
     ):
         self._runtime_template = self._load("runtime.md")
         self._shared_soul = shared_soul
+        self._shared_notes_index = shared_notes_index
         self._agent_profile = agent_profile
         self._file_access = file_access or FileAccessConfig()
         # Cached rendered blocks — static for the process lifetime.
         self._soul_block: Optional[str] = None
+        self._notes_block: Optional[str] = None
         self._profile_block: Optional[str] = None
 
     def reload_resources(self, *, soul: bool = True, profile: bool = True) -> None:
-        """Clear selected cached prompt resources; files reload on next prompt."""
+        """Clear selected cached prompt resources; files reload on next prompt.
+
+        The shared notes router is a shared resource like the soul, so it is
+        cleared alongside the soul.
+        """
         if soul:
             self._soul_block = None
+            self._notes_block = None
         if profile:
             self._profile_block = None
 
@@ -126,6 +135,12 @@ class PromptAssembler:
                 resource_path=self._shared_soul,
                 scope_hint="kb",
             )
+        if self._notes_block is None:
+            self._notes_block = self._render_prompt_resource(
+                name="SHARED_NOTES_INDEX",
+                resource_path=self._shared_notes_index,
+                scope_hint="kb",
+            )
         if self._profile_block is None:
             self._profile_block = self._render_prompt_resource(
                 name="AGENT_PROFILE",
@@ -134,6 +149,7 @@ class PromptAssembler:
             )
         runtime = self._runtime_template
         runtime = runtime.replace(SHARED_SOUL_INCLUDE, self._soul_block)
+        runtime = runtime.replace(SHARED_NOTES_INDEX_INCLUDE, self._notes_block)
         runtime = runtime.replace(AGENT_PROFILE_INCLUDE, self._profile_block)
         return runtime
 

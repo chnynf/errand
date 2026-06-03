@@ -147,7 +147,8 @@ def test_list_dir_marks_dirs_and_hides_dotfiles(kb: Path):
 async def test_append_creates_file(kb: Path):
     out = await ft.append_file("notes/new.md", "first line\n")
     assert out.startswith("Appended")
-    assert (kb / "notes" / "new.md").read_text(encoding="utf-8") == "first line\n"
+    # append_file prepends a newline so each entry starts on its own line.
+    assert (kb / "notes" / "new.md").read_text(encoding="utf-8") == "\nfirst line\n"
 
 
 async def test_append_adds_to_existing_without_overwriting(kb: Path):
@@ -155,7 +156,7 @@ async def test_append_adds_to_existing_without_overwriting(kb: Path):
     out = await ft.append_file("notes/log.md", "added\n")
     assert out.startswith("Appended")
     content = (kb / "notes" / "log.md").read_text(encoding="utf-8")
-    assert content == "original\nadded\n"
+    assert content == "original\n\nadded\n"
 
 
 async def test_append_cannot_escape_root(kb: Path):
@@ -297,7 +298,7 @@ async def test_ask_append_proceeds_when_approved(tmp_path: Path, monkeypatch):
     approver = _Approver(answer=True)
     out = await ft.append_file("x.md", "hi", _context={"reply_to": approver})
     assert out.startswith("Appended")
-    assert (root / "x.md").read_text(encoding="utf-8") == "hi"
+    assert (root / "x.md").read_text(encoding="utf-8") == "\nhi"
 
 
 async def test_ask_edit_blocks_without_channel(tmp_path: Path, monkeypatch):
@@ -356,9 +357,9 @@ async def test_per_op_permissions_are_independent(tmp_path: Path, monkeypatch):
     assert "not permitted" in await ft.write_file("x.md", "replaced")
     # edit blocked
     assert "not permitted" in await ft.edit_file("x.md", "original", "changed")
-    # file content unchanged from write/edit attempts
+    # file content reflects only the append (write/edit were blocked)
     content = (root / "x.md").read_text(encoding="utf-8")
-    assert content == "original appended"
+    assert content == "original\n appended"
 
 
 # --- session memory compaction -------------------------------------------------

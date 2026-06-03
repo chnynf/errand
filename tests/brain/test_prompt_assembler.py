@@ -60,6 +60,55 @@ def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
     assert "Start by reading AGENT_PROFILE" not in prompt
 
 
+def test_system_prompt_includes_shared_notes_index(tmp_path):
+    soul = tmp_path / "SOUL.md"
+    notes = tmp_path / "NOTES.md"
+    profile = tmp_path / "INDEX.md"
+    soul.write_text("# Soul", encoding="utf-8")
+    notes.write_text("# Notes Router\n\nLook in notes/inbox.md.", encoding="utf-8")
+    profile.write_text("# Profile", encoding="utf-8")
+
+    assembler = PromptAssembler(
+        shared_soul=str(soul),
+        agent_profile=str(profile),
+        shared_notes_index=str(notes),
+        file_access=FileAccessConfig(
+            default_scope="kb",
+            scopes={"kb": FileScope(roots=[str(tmp_path)])},
+        ),
+    )
+    prompt = assembler.build_system_prompt()
+    assert "--- BEGIN PROMPT RESOURCE: SHARED_NOTES_INDEX ---" in prompt
+    assert "Logical path: NOTES.md" in prompt
+    assert "Look in notes/inbox.md." in prompt
+    assert "{{ include:SHARED_NOTES_INDEX }}" not in prompt
+    # Order: soul, then notes, then agent profile.
+    assert (
+        prompt.index("SHARED_SOUL")
+        < prompt.index("SHARED_NOTES_INDEX")
+        < prompt.index("AGENT_PROFILE")
+    )
+
+
+def test_no_notes_index_leaves_no_placeholder(tmp_path):
+    assembler = PromptAssembler()
+    prompt = assembler.build_system_prompt()
+    assert "{{ include:SHARED_NOTES_INDEX }}" not in prompt
+
+
+def test_notes_block_reloads_with_soul(tmp_path):
+    notes = tmp_path / "NOTES.md"
+    notes.write_text("v1", encoding="utf-8")
+    assembler = PromptAssembler(shared_notes_index=str(notes))
+    assembler.build_system_prompt()
+    assert assembler._notes_block is not None
+    notes.write_text("v2", encoding="utf-8")
+    assembler.reload_resources(soul=True, profile=False)
+    assert assembler._notes_block is None
+    prompt = assembler.build_system_prompt()
+    assert "v2" in prompt
+
+
 def test_soul_and_profile_blocks_are_cached(tmp_path):
     soul = tmp_path / "SOUL.md"
     soul.write_text("Soul content.", encoding="utf-8")

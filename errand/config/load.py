@@ -192,6 +192,7 @@ class ErrandConfig:
     models: dict = field(default_factory=dict)
     model_strategy: list[str] = field(default_factory=list)
     shared_soul: str | None = None
+    shared_notes_index: str | None = None
     agent_profile: str | None = None
     retry: dict = field(default_factory=dict)
     default_agent: str = "default"
@@ -253,6 +254,7 @@ class ErrandConfig:
             models=dict(data.get("models") or {}),
             model_strategy=list(data.get("model_strategy") or []),
             shared_soul=data.get("shared_soul"),
+            shared_notes_index=data.get("shared_notes_index"),
             agent_profile=data.get("agent_profile"),
             retry=dict(data.get("retry") or {}),
             default_agent=default_agent,
@@ -279,6 +281,7 @@ def load_raw_config(path: Path = CONFIG_PATH) -> dict:
 
     Environment overrides:
         ERRAND_SHARED_SOUL: shared soul prompt resource path.
+        ERRAND_SHARED_NOTES_INDEX: shared notes router prompt resource path.
         ERRAND_AGENT_PROFILE: agent profile / KB entrypoint path.
         ERRAND_KNOWLEDGE_ROOTS: os.pathsep-separated roots for the ``kb`` scope.
     """
@@ -304,6 +307,9 @@ def load_raw_config(path: Path = CONFIG_PATH) -> dict:
         default_agent = data.get("default_agent")
         if default_agent and isinstance(data.get("agents"), dict):
             data["agents"].setdefault(default_agent, {})["shared_soul"] = shared_soul
+
+    if notes_index := os.getenv("ERRAND_SHARED_NOTES_INDEX"):
+        data["shared_notes_index"] = notes_index
 
     if profile := os.getenv("ERRAND_AGENT_PROFILE"):
         data["agent_profile"] = profile
