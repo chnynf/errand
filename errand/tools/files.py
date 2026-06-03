@@ -274,7 +274,7 @@ async def append_file(
             raise PermissionError(f"Parent directory not within file scope '{name}': {target.parent}")
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as fh:
-            fh.write(content)
+            fh.write("\n" + content)
         return f"Appended {len(data)} bytes to {target}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
