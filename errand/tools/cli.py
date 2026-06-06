@@ -19,19 +19,16 @@ async def run_cli(
 ) -> str:
     """Run a local shell command and return stdout/stderr.
 
-    Use when the Swarm agent itself needs to run an installed CLI tool such as
-    databricks, aws, git, uv, or python. For tasks the user explicitly wants a
-    specific external agent (Claude, Cursor) to handle, use invoke_external_agent
-    instead.
+    Use when the agent needs to run a CLI tool (e.g. databricks, aws, git, uv, python).
+    For tasks requiring a specific external agent (Claude, Cursor), use invoke_external_agent.
 
     Args:
         command: Shell command to run.
-        cwd: Optional working directory. Defaults to the Swarm project root.
-        timeout_seconds: Maximum runtime before killing the command.
-        max_output_chars: Maximum stdout/stderr characters returned to the model.
+        cwd: Working directory (optional; defaults to project root).
+        timeout_seconds: Max runtime in seconds.
+        max_output_chars: Max output characters returned.
 
-    Returns:
-        Command, working directory, exit code, stdout, and stderr.
+    Returns: Command, cwd, exit code, stdout, stderr.
     """
     command = (command or "").strip()
     if not command:

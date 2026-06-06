@@ -1,17 +1,10 @@
 def calculate(expression: str) -> str:
-    """
-    Evaluate a mathematical expression.
+    """Evaluate a mathematical expression.
 
-    This tool is intentionally kept simple and is useful for testing whether
-    the agent can call tools. Do not rely on it for high-stakes math,
-    statistics, finance, or symbolic computation.
-    
-    Args: 
-        expression: The mathematical expression to evaluate (e.g., "2 + 2", "10 * 5").
-        
-    Returns: The result of the evaluation as a string.
+    Args:
+        expression: Expression to evaluate, e.g. "2 + 2", "10 * 5".
 
-    Example: calculate("10 + 5") returns '15'
+    Returns: Result as a string.
     """
     try:
         # DANGEROUS in production: eval()

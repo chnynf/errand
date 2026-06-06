@@ -47,25 +47,17 @@ def _get_smtp_config() -> dict:
 
 
 def send_email(to: str, subject: str, body: str) -> str:
-    """
-    Send an email via SMTP.
+    """Send an email via SMTP.
 
-    Use only when the user explicitly asks to send an email. Do not use for
-    "send me a message", "tell me", "summarize", "draft an email", or
-    "write an email" unless the user clearly asks you to actually send it.
-
-    If the recipient is ambiguous, first use list_contacts or ask for a
-    recipient. If the user only asks for a draft, respond in chat and do not
-    call this tool.
+    Use only when the user explicitly asks to send an email (not draft).
+    Resolve ambiguous recipients with list_contacts first.
 
     Args:
-        to: Recipient name (looked up in contacts.md) or email address.
-        subject: Email subject line.
-        body: Email body text.
+        to: Recipient name (from contacts.md) or email address.
+        subject: Subject line.
+        body: Body text.
 
-    Returns: A success or error message.
-
-    Example: send_email("Alice", "Hello", "Hi Alice, how are you?")
+    Returns: Success or error message.
     """
     if "@" in to:
         recipient_email = to
@@ -102,15 +94,11 @@ def send_email(to: str, subject: str, body: str) -> str:
 
 
 def list_contacts() -> str:
-    """
-    List saved email contacts.
+    """List saved email contacts.
 
-    Use only to support email-related requests, such as resolving a recipient
-    before sending email or showing the user available contacts.
+    Use when resolving a recipient for email or when the user asks for available contacts.
 
-    Returns: A formatted list of contact names and email addresses.
-
-    Example: list_contacts() returns all saved contacts
+    Returns: Contact names and email addresses.
     """
     contacts = _load_contacts()
     if not contacts:
@@ -123,19 +111,15 @@ def list_contacts() -> str:
 
 
 def add_contact(name: str, email: str) -> str:
-    """
-    Add a new saved email contact.
+    """Add a new saved email contact.
 
-    Use only when the user explicitly asks to save/add a contact for future
-    email use. Do not infer contacts from arbitrary conversation text.
+    Use only when the user explicitly asks to save a contact.
 
     Args:
-        name: The contact's display name.
-        email: The contact's email address.
+        name: Display name.
+        email: Email address.
 
-    Returns: A confirmation or error message.
-
-    Example: add_contact("Alice", "alice@example.com")
+    Returns: Confirmation or error.
     """
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return f"Invalid email address: {email}"

@@ -22,28 +22,19 @@ def schedule_message(
     intent: str = "execute",
     end_at: str = "",
 ) -> str:
-    """
-    Schedule a future or recurring task/message.
+    """Schedule a future or recurring task/message.
 
-    Use when the user explicitly asks to remind, schedule, run later, repeat,
-    or check something on a cadence. This tool only creates the scheduled job;
-    do NOT execute the task immediately unless the user separately asks for
-    immediate execution.
-
-    For simple reminders that should just deliver text, use intent="say".
-    For tasks that should be run by the agent at trigger time, use
-    intent="execute".
+    Creates the job only; do NOT run the task immediately.
+    Use intent="say" for text reminders, intent="execute" for agent-run tasks.
 
     Args:
-        message: The task to schedule. You MUST format the message using this exact template: "I am the user. I want you to [insert task description here]. Please execute now." Do not just copy the user's input; wrap it in this template.
-        schedule_kind: "at" (one-shot), "every" (recurring), or "cron" (cron expression).
-        schedule_value: Pre-parsed by AI. For "at" = ISO 8601 (e.g. "2025-02-24T09:00:00Z");
-            for "every" = seconds or "1h"/"1d"/"30m"; for "cron" = "0 7 * * *".
-        name: Optional name for the job.
-        session_id: Current session ID (from session context; required). Used for delivery.
-        intent: "execute" (default) to run as an instruction, or "say" to just deliver the message text to the user without AI processing.
-        end_at: Optional ISO 8601 UTC timestamp to stop recurring jobs at/after this time.
-            Only supported for "every" and "cron" schedules.
+        message: Task to schedule. Wrap in: "I am the user. I want you to [task]. Please execute now."
+        schedule_kind: "at" (one-shot), "every" (recurring), or "cron".
+        schedule_value: "at"=ISO 8601 UTC; "every"=seconds or "1h"/"30m"/"1d"; "cron"=5-field expr.
+        name: Optional job name.
+        session_id: Current session ID (required).
+        intent: "execute" (run as instruction) or "say" (deliver text verbatim).
+        end_at: ISO 8601 UTC end time for recurring schedules.
 
     Returns: Confirmation with job ID and next run time.
     """

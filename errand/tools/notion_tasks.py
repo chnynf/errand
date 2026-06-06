@@ -83,21 +83,14 @@ def _extract_page_content(headers: dict, page_id: str) -> str:
 
 
 def get_notion_tasks(status_filter: str = "To Do,Doing") -> str:
-    """
-    Fetch tasks from the user's Notion "Task List" database.
+    """Fetch tasks from the Notion "Task List" database.
 
-    Use when the user asks about their Notion tasks, todo list, current work,
-    or items by status. Do not use for general project planning unless the
-    user asks to consult Notion.
-
-    Returns task names and page-content context grouped by status.
+    Use when the user asks about their Notion tasks, todo list, or items by status.
 
     Args:
-        status_filter: Comma-separated status values to filter by (e.g., "To Do,Doing").
+        status_filter: Comma-separated status values (e.g. "To Do,Doing").
 
-    Returns: A formatted list of task names and context, grouped by status.
-
-    Example: get_notion_tasks("To Do,Doing") returns tasks with those statuses
+    Returns: Task names and context grouped by status.
     """
     try:
         headers = _get_headers()
