@@ -197,6 +197,8 @@ class Brain:
                     )
 
                 usage_data["model"] = actual_model
+                usage_data["model_key"] = model_key
+                usage_data["pricing"] = (self.models_config.get(model_key) or {}).get("pricing")
 
                 if decision.tool_calls:
                     self._last_provider_name = provider_name
@@ -310,6 +312,10 @@ class Brain:
                     )
 
                 usage_data["model"] = actual_model
+                usage_data["model_key"] = self._last_model_key
+                usage_data["pricing"] = (
+                    self.models_config.get(self._last_model_key) or {}
+                ).get("pricing")
 
                 if decision.tool_calls:
                     self._last_provider_name = provider_name

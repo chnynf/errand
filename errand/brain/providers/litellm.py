@@ -65,6 +65,25 @@ def _parse_tool_calls(message) -> List[ToolCall]:
     return calls
 
 
+def _cached_read_tokens(usage) -> int:
+    """Number of input tokens served from a prompt cache (a "cache hit").
+
+    Providers expose this differently and LiteLLM does not unify it:
+      - OpenAI-compatible / DeepSeek / Gemini: normalized into
+        ``usage.prompt_tokens_details.cached_tokens``. (DeepSeek's native
+        ``prompt_cache_hit_tokens`` is mapped here by LiteLLM.)
+      - Anthropic: a dedicated ``usage.cache_read_input_tokens`` field.
+
+    We check the OpenAI-style location first (it covers every model in our
+    config today) and fall back to the Anthropic field.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", 0) if details is not None else 0
+    if not cached:
+        cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+    return cached or 0
+
+
 def _extract_usage(response) -> dict:
     usage = getattr(response, "usage", None)
     if not usage:
@@ -75,12 +94,13 @@ def _extract_usage(response) -> dict:
             "cache_read_tokens": 0,
         }
     return {
+        # ``prompt_tokens`` is the TOTAL input, including any cache-hit tokens.
         "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
         "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-        # Populated by Anthropic and Gemini when prompt caching is active;
-        # zero for providers that don't support it (silently ignored).
+        # Anthropic-only: tokens written into the cache on this call.
         "cache_creation_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
-        "cache_read_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+        # Input tokens served from cache (DeepSeek/OpenAI/Gemini/Anthropic).
+        "cache_read_tokens": _cached_read_tokens(usage),
     }
 
 

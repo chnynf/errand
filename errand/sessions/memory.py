@@ -26,6 +26,34 @@ _FILENAME_ILLEGAL = '<>:"/\\|?*'
 
 def _safe_stem(session_id: str) -> str:
     return "".join("_" if c in _FILENAME_ILLEGAL else c for c in session_id)
+
+
+def estimate_cost(
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    pricing: Optional[Dict[str, float]],
+) -> float:
+    """Estimate USD cost for one call from per-model pricing (per 1M tokens).
+
+    ``input_tokens`` is the total prompt size and already includes any
+    ``cache_read_tokens`` (cache hits). Cache hits are billed at the cheaper
+    ``cache_read`` rate, so we split input into fresh vs cached and price each
+    separately. Returns 0.0 when no pricing is configured for the model.
+    """
+    if not pricing:
+        return 0.0
+    in_rate = pricing.get("input", 0.0) or 0.0
+    out_rate = pricing.get("output", 0.0) or 0.0
+    cache_rate = pricing.get("cache_read", in_rate)
+    if cache_rate is None:
+        cache_rate = in_rate
+    fresh_input = max(input_tokens - cache_read_tokens, 0)
+    return (
+        (fresh_input / 1_000_000) * in_rate
+        + (cache_read_tokens / 1_000_000) * cache_rate
+        + (output_tokens / 1_000_000) * out_rate
+    )
 IDLE_BOUNDARY_NOTE = (
     "There was a long idle gap in this conversation. Treat the current message "
     "as a new topic if it does not appear related to the last exchange."
@@ -81,6 +109,9 @@ class Memory:
             "token_summary": {
                 "input_tokens": 0,
                 "output_tokens": 0,
+                # Subset of input_tokens that were served from a prompt cache
+                # (billed at the much cheaper cache-hit rate).
+                "cache_read_tokens": 0,
                 "total_cost": 0.0,
             },
         }
@@ -114,12 +145,26 @@ class Memory:
         if entries:
             self.add_history("tool", entries)
 
-    def update_token_usage(self, input_tokens: int, output_tokens: int) -> None:
-        cost = (input_tokens / 1_000_000) * 3.50 + (output_tokens / 1_000_000) * 10.50
+    def update_token_usage(self, usage: Dict[str, Any]) -> None:
+        """Accumulate one API call's usage into the session ``token_summary``.
+
+        Token counts come straight from the provider's ``usage`` object (the
+        formally billed values) -- nothing is estimated here. Cost is derived
+        from the per-model ``pricing`` block carried on the usage dict; if a
+        model has no pricing configured, its cost contributes 0.
+        """
+        input_tokens = usage.get("input_tokens", 0) or 0
+        output_tokens = usage.get("output_tokens", 0) or 0
+        cache_read_tokens = usage.get("cache_read_tokens", 0) or 0
+
         summary = self.data["token_summary"]
         summary["input_tokens"] += input_tokens
         summary["output_tokens"] += output_tokens
-        summary["total_cost"] += cost
+        summary.setdefault("cache_read_tokens", 0)
+        summary["cache_read_tokens"] += cache_read_tokens
+        summary["total_cost"] += estimate_cost(
+            input_tokens, output_tokens, cache_read_tokens, usage.get("pricing")
+        )
 
     def set_context_summary(self, summary: Optional[str]) -> None:
         self.data["context_summary"] = summary

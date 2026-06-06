@@ -131,9 +131,7 @@ class AgentLoop:
                 if usage.get("model"):
                     round_models_used.append(usage.get("model").split("/")[-1])
 
-                self.memory.update_token_usage(
-                    usage["input_tokens"], usage["output_tokens"]
-                )
+                self.memory.update_token_usage(usage)
 
             if brain_output.get("error"):
                 final_response = decision.text_response or "I encountered an internal error."
@@ -277,12 +275,17 @@ class AgentLoop:
         unique_models = list(dict.fromkeys(round_models_used))
         models_str = ", ".join(unique_models) if unique_models else "None"
 
-        cache_str = ""
-        if round_cache_creation_tokens or round_cache_read_tokens:
-            cache_str = f" · cache write {round_cache_creation_tokens}, hit {round_cache_read_tokens}"
+        # cache_read is a subset of input_tokens (a "cache hit"); cache_write
+        # is Anthropic-only and stays 0 for DeepSeek/Gemini, so hide it then.
+        cache_bits = []
+        if round_cache_read_tokens:
+            cache_bits.append(f"{round_cache_read_tokens} cached")
+        if round_cache_creation_tokens:
+            cache_bits.append(f"{round_cache_creation_tokens} cache-write")
+        cache_str = f" ({', '.join(cache_bits)})" if cache_bits else ""
         usage_msg = (
             f"\n\n---\n*Models used: {models_str}*\n"
-            f"*Tokens: {round_input_tokens} in, {round_output_tokens} out{cache_str}*\n"
+            f"*Tokens: {round_input_tokens} in{cache_str}, {round_output_tokens} out*\n"
             f"*Tools used: {tools_str}*"
         )
         if metadata and metadata.get("is_scheduled_task"):

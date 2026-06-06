@@ -3,24 +3,28 @@
         "gemini-flash": {
             "provider": "gemini",
             "litellm_model": "gemini/gemini-3-flash-preview",
-            "native_tools": true
+            "native_tools": true,
+            "pricing": {"input": 0.30, "output": 2.50, "cache_read": 0.075}
         },
         "gemini-3.5-flash": {
             "provider": "gemini",
             "litellm_model": "gemini/gemini-3.5-flash",
-            "native_tools": true
+            "native_tools": true,
+            "pricing": {"input": 0.30, "output": 2.50, "cache_read": 0.075}
         },
         "deepseek-chat": {
             "provider": "deepseek",
             "litellm_model": "deepseek/deepseek-chat",
-            "native_tools": true
+            "native_tools": true,
+            "pricing": {"input": 0.28, "output": 0.42, "cache_read": 0.028}
         },
         "openai-compatible-example": {
             "provider": "example-provider",
             "litellm_model": "openai/provider/model-name",
             "api_base": "https://example.com/v1",
             "api_key_env": "EXAMPLE_PROVIDER_API_KEY",
-            "native_tools": true
+            "native_tools": true,
+            "pricing": {"input": 0.0, "output": 0.0, "cache_read": 0.0}
         },
         "siliconflow-deepseek-v4-flash": {
             "provider": "siliconflow",
@@ -30,7 +34,8 @@
             "native_tools": true,
             "extra_body": {
                 "enable_thinking": false
-            }
+            },
+            "pricing": {"input": 0.14, "output": 0.28, "cache_read": 0.0028}
         },
         "siliconflow-deepseek-v4-pro": {
             "provider": "siliconflow",
@@ -40,7 +45,8 @@
             "native_tools": true,
             "extra_body": {
                 "enable_thinking": false
-            }
+            },
+            "pricing": {"input": 0.28, "output": 1.10, "cache_read": 0.028}
         }
     },
 

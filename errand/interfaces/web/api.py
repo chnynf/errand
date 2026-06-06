@@ -118,23 +118,32 @@ def build_api(swarm_app: "ErrandApp") -> FastAPI:
         daily: dict[str, dict[str, float]] = {}
         total_input = 0
         total_output = 0
+        total_cached = 0
         total_cost = 0.0
 
         for s in sessions:
             summary = s.get("token_summary", {})
             day = s.get("day", "unknown")
             if day not in daily:
-                daily[day] = {"input_tokens": 0, "output_tokens": 0, "total_cost": 0.0}
+                daily[day] = {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "total_cost": 0.0,
+                }
             daily[day]["input_tokens"] += summary.get("input_tokens", 0)
             daily[day]["output_tokens"] += summary.get("output_tokens", 0)
+            daily[day]["cache_read_tokens"] += summary.get("cache_read_tokens", 0)
             daily[day]["total_cost"] += summary.get("total_cost", 0.0)
             total_input += summary.get("input_tokens", 0)
             total_output += summary.get("output_tokens", 0)
+            total_cached += summary.get("cache_read_tokens", 0)
             total_cost += summary.get("total_cost", 0.0)
 
         return JSONResponse({
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
+            "total_cache_read_tokens": total_cached,
             "total_cost_usd": round(total_cost, 4),
             "by_day": daily,
         })

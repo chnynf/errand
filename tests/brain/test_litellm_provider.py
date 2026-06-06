@@ -24,8 +24,15 @@ def _mk_response(
     completion_tokens=5,
     cache_creation_input_tokens=0,
     cache_read_input_tokens=0,
+    cached_tokens=None,
 ):
-    """Build a minimal LiteLLM-shaped response object."""
+    """Build a minimal LiteLLM-shaped response object.
+
+    ``cached_tokens`` populates the OpenAI-style
+    ``usage.prompt_tokens_details.cached_tokens`` that LiteLLM normalizes
+    DeepSeek/OpenAI/Gemini cache hits into. ``cache_read_input_tokens`` is
+    the Anthropic-specific fallback field.
+    """
     message = SimpleNamespace(content=content, tool_calls=tool_calls or None)
     choice = SimpleNamespace(message=message)
     usage = SimpleNamespace(
@@ -34,6 +41,8 @@ def _mk_response(
         cache_creation_input_tokens=cache_creation_input_tokens,
         cache_read_input_tokens=cache_read_input_tokens,
     )
+    if cached_tokens is not None:
+        usage.prompt_tokens_details = SimpleNamespace(cached_tokens=cached_tokens)
     return SimpleNamespace(choices=[choice], usage=usage)
 
 
@@ -92,6 +101,48 @@ async def test_text_response_parses_context_summary(provider):
     assert decision.text_response == "The answer is 42."
     assert decision.context_summary == "User asked for the answer."
     assert usage == {"input_tokens": 10, "output_tokens": 5, "cache_creation_tokens": 0, "cache_read_tokens": 0}
+
+
+async def test_cache_hit_tokens_from_prompt_tokens_details(provider):
+    """DeepSeek/OpenAI/Gemini cache hits arrive via prompt_tokens_details.cached_tokens."""
+    response = _mk_response(content="ok", prompt_tokens=1000, cached_tokens=800)
+    with patch(
+        "errand.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ):
+        _, usage = await provider.generate_with_tools(
+            model="openai/deepseek-ai/DeepSeek-V4-Flash",
+            system_prompt="soul",
+            prompt="hi",
+            tool_definitions=[],
+        )
+
+    assert usage["input_tokens"] == 1000
+    assert usage["cache_read_tokens"] == 800
+    assert usage["cache_creation_tokens"] == 0
+
+
+async def test_cache_hit_tokens_anthropic_fallback(provider):
+    """When prompt_tokens_details is absent, fall back to the Anthropic field."""
+    response = _mk_response(
+        content="ok",
+        prompt_tokens=1000,
+        cache_read_input_tokens=600,
+        cache_creation_input_tokens=200,
+    )
+    with patch(
+        "errand.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ):
+        _, usage = await provider.generate_with_tools(
+            model="anthropic/claude-3-5-sonnet",
+            system_prompt="soul",
+            prompt="hi",
+            tool_definitions=[],
+        )
+
+    assert usage["cache_read_tokens"] == 600
+    assert usage["cache_creation_tokens"] == 200
 
 
 async def test_tool_call_parsing(provider, calculator_tool):

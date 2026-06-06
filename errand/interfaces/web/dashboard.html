@@ -97,11 +97,12 @@
   <div class="tab" id="tab-tokens">
     <div class="stats">
       <div class="stat"><div class="stat-value in" id="totalInput">—</div><div class="stat-label">Input Tokens</div></div>
+      <div class="stat"><div class="stat-value in" id="totalCached">—</div><div class="stat-label">Cached (of input)</div></div>
       <div class="stat"><div class="stat-value out" id="totalOutput">—</div><div class="stat-label">Output Tokens</div></div>
       <div class="stat"><div class="stat-value cost" id="totalCost">—</div><div class="stat-label">Estimated Cost</div></div>
     </div>
     <table>
-      <thead><tr><th>Date</th><th>Input Tokens</th><th>Output Tokens</th><th>Cost</th></tr></thead>
+      <thead><tr><th>Date</th><th>Input Tokens</th><th>Cached</th><th>Output Tokens</th><th>Cost</th></tr></thead>
       <tbody id="tokenTable"></tbody>
     </table>
   </div>
@@ -109,7 +110,7 @@
   <!-- Sessions Tab -->
   <div class="tab" id="tab-sessions">
     <table>
-      <thead><tr><th>Session</th><th>Agent</th><th>Messages</th><th>Input Tokens</th><th>Output Tokens</th><th>Cost</th></tr></thead>
+      <thead><tr><th>Session</th><th>Agent</th><th>Messages</th><th>Input Tokens</th><th>Cached</th><th>Output Tokens</th><th>Cost</th></tr></thead>
       <tbody id="sessionTable"></tbody>
     </table>
   </div>
@@ -188,12 +189,13 @@ async function loadTokens() {
   const res = await fetch('/api/tokens');
   const data = await res.json();
   document.getElementById('totalInput').textContent = fmt(data.total_input_tokens);
+  document.getElementById('totalCached').textContent = fmt(data.total_cache_read_tokens || 0);
   document.getElementById('totalOutput').textContent = fmt(data.total_output_tokens);
   document.getElementById('totalCost').textContent = '$' + data.total_cost_usd.toFixed(4);
   const tbody = document.getElementById('tokenTable');
   tbody.innerHTML = '';
   Object.entries(data.by_day).sort((a,b) => b[0].localeCompare(a[0])).forEach(([day, d]) => {
-    tbody.innerHTML += `<tr><td>${day}</td><td>${fmt(d.input_tokens)}</td><td>${fmt(d.output_tokens)}</td><td>$${d.total_cost.toFixed(4)}</td></tr>`;
+    tbody.innerHTML += `<tr><td>${day}</td><td>${fmt(d.input_tokens)}</td><td>${fmt(d.cache_read_tokens||0)}</td><td>${fmt(d.output_tokens)}</td><td>$${d.total_cost.toFixed(4)}</td></tr>`;
   });
 }
 
@@ -210,6 +212,7 @@ async function loadSessions() {
       <td>${s.agent_id}</td>
       <td>${s.message_count}</td>
       <td>${fmt(ts.input_tokens||0)}</td>
+      <td>${fmt(ts.cache_read_tokens||0)}</td>
       <td>${fmt(ts.output_tokens||0)}</td>
       <td>$${(ts.total_cost||0).toFixed(4)}</td>
     </tr>`;
