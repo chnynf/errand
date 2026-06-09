@@ -1,6 +1,6 @@
-"""Scheduler tools. AI provides pre-parsed schedule values."""
+"""Scheduling tools. The AI supplies pre-parsed schedule values."""
 
-from typing import Optional
+from typing import Any
 
 from errand.scheduler.store import JobStore
 from errand.scheduler.schedule import (
@@ -13,115 +13,102 @@ from errand.scheduler.schedule import (
 _store = JobStore()
 
 
+def _build_schedule(kind: str, value: str, end_at: str) -> tuple[dict | None, str]:
+    """Validate inputs and return (schedule, error); schedule is None on error."""
+    if kind == "at":
+        if end_at:
+            return None, "end_at is only supported for recurring schedules ('every' or 'cron')."
+        if not validate_at(value):
+            return None, f"Invalid ISO 8601 timestamp for 'at': {value!r}. Use e.g. 2025-02-24T09:00:00Z."
+        return {"kind": "at", "at": value.strip()}, ""
+    if kind == "every":
+        interval = parse_every(value)
+        if not interval:
+            return None, f"Invalid interval for 'every': {value!r}. Use seconds (3600) or '1h', '30m', '1d'."
+        return {"kind": "every", "interval_seconds": interval}, ""
+    if kind == "cron":
+        expr = value.strip()
+        if not validate_cron(expr):
+            return None, f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
+        return {"kind": "cron", "expr": expr}, ""
+    return None, f"schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
+
+
+def _describe(schedule: dict) -> str:
+    """Render a human-readable summary of a schedule."""
+    kind = schedule["kind"]
+    if kind == "at":
+        text = f"at {schedule['at']}"
+    elif kind == "every":
+        text = f"every {schedule['interval_seconds']}s"
+    else:  # cron
+        text = f"cron '{schedule['expr']}'"
+    end_at = schedule.get("end_at")
+    return f"{text} until {end_at}" if end_at else text
+
+
 def schedule_message(
     message: str,
     schedule_kind: str,
     schedule_value: str,
     name: str = "",
-    session_id: str = "",
     intent: str = "execute",
     end_at: str = "",
+    _context: dict[str, Any] | None = None,
 ) -> str:
     """Schedule a future or recurring task/message.
 
-    Creates the job only; do NOT run the task immediately.
-    Use intent="say" for text reminders, intent="execute" for agent-run tasks.
+    Creates the job only; do NOT run the task now. The job fires later on its own.
 
     Args:
-        message: Task to schedule. Wrap in: "I am the user. I want you to [task]. Please execute now."
+        message: What should happen when the job fires (NOT the user's scheduling
+            request verbatim). Resolve the payload now:
+            - intent="execute": the action to perform, phrased as an instruction to
+              yourself, e.g. "Summarize today's unread emails and send them to the user."
+              Never store the trigger phrasing like "remind me in 10 minutes" as the task.
+            - intent="say": the exact text to deliver to the user, verbatim.
         schedule_kind: "at" (one-shot), "every" (recurring), or "cron".
         schedule_value: "at"=ISO 8601 UTC; "every"=seconds or "1h"/"30m"/"1d"; "cron"=5-field expr.
         name: Optional job name.
-        session_id: Current session ID (required).
         intent: "execute" (run as instruction) or "say" (deliver text verbatim).
         end_at: ISO 8601 UTC end time for recurring schedules.
 
     Returns: Confirmation with job ID and next run time.
     """
+    session_id = str((_context or {}).get("session_id") or "").strip()
     if not session_id:
-        return (
-            "session_id is required for scheduling. "
-            "It should be provided by the current session context."
-        )
+        return "Scheduling is unavailable: no active session context."
 
     kind = (schedule_kind or "").strip().lower()
-    if kind not in ("at", "every", "cron"):
-        return f"schedule_kind must be 'at', 'every', or 'cron'. Got: {schedule_kind!r}"
-
-    schedule: dict
-    next_run: Optional[str] = None
-    end_at_iso = str(end_at or "").strip()
-    if end_at_iso and not validate_at(end_at_iso):
-        return (
-            f"Invalid ISO 8601 timestamp for 'end_at': {end_at!r}. "
-            "Use format like 2025-02-24T09:00:00Z."
-        )
-
-    if kind == "at":
-        if end_at_iso:
-            return "end_at is only supported for recurring schedules ('every' or 'cron')."
-        if not validate_at(str(schedule_value)):
-            return f"Invalid ISO 8601 timestamp for 'at': {schedule_value!r}. Use format like 2025-02-24T09:00:00Z."
-        at_iso = str(schedule_value).strip()
-        schedule = {"kind": "at", "at": at_iso}
-        next_run = at_iso
-
-    elif kind == "every":
-        interval = parse_every(schedule_value)
-        if not interval:
-            return (
-                f"Invalid interval for 'every': {schedule_value!r}. "
-                "Use seconds (e.g. 3600) or '1h', '1d', '30m'."
-            )
-        schedule = {"kind": "every", "interval_seconds": interval}
-        if end_at_iso:
-            schedule["end_at"] = end_at_iso
-        next_run = next_run_at(schedule)
-        if not next_run:
-            if end_at_iso:
-                return "No valid run can be scheduled before end_at."
-            return "Failed to compute next run time for interval."
-
-    elif kind == "cron":
-        expr = str(schedule_value).strip()
-        if not validate_cron(expr):
-            return f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
-        schedule = {"kind": "cron", "expr": expr}
-        if end_at_iso:
-            schedule["end_at"] = end_at_iso
-        next_run = next_run_at(schedule)
-        if not next_run:
-            if end_at_iso:
-                return "No valid run can be scheduled before end_at."
-            return "Failed to compute next run time for cron expression."
-
     intent = (intent or "execute").strip().lower()
     if intent not in ("execute", "say"):
         return f"intent must be 'execute' or 'say'. Got: {intent!r}"
 
-    job_name = (name or "").strip() or "Scheduled task"
+    end_at = str(end_at or "").strip()
+    if end_at and not validate_at(end_at):
+        return f"Invalid ISO 8601 timestamp for 'end_at': {end_at!r}. Use e.g. 2025-02-24T09:00:00Z."
+
+    schedule, error = _build_schedule(kind, str(schedule_value), end_at)
+    if error:
+        return error
+    if end_at:
+        schedule["end_at"] = end_at
+
+    next_run = next_run_at(schedule)
+    if not next_run:
+        return "No valid run can be scheduled" + (f" before {end_at}." if end_at else ".")
+
     job = _store.add(
-        name=job_name,
+        name=(name or "").strip() or "Scheduled task",
         schedule=schedule,
         message=message,
         delivery_session_id=session_id,
         next_run_at=next_run,
         intent=intent,
     )
-    if kind == "at":
-        schedule_details = f"at {schedule.get('at')}"
-    elif kind == "every":
-        schedule_details = f"every {schedule.get('interval_seconds')}s"
-    else:
-        schedule_details = f"cron '{schedule.get('expr')}'"
-    if schedule.get("end_at"):
-        schedule_details = f"{schedule_details} until {schedule['end_at']}"
-
     return (
-        f"Scheduled: {job_name} (id: {job['id']}). "
-        f"Schedule: {schedule_details}. "
-        f"Next run: {next_run}. "
-        f"Intent: {intent}."
+        f"Scheduled: {job['name']} (id: {job['id']}). "
+        f"Schedule: {_describe(schedule)}. Next run: {next_run}. Intent: {intent}."
     )
 
 
@@ -134,27 +121,11 @@ def list_scheduled_jobs() -> str:
     jobs = _store.list_enabled()
     if not jobs:
         return "No scheduled jobs."
-
     lines = ["Scheduled jobs:"]
     for j in jobs:
-        name = j.get("name", "?")
-        job_id = j.get("id", "?")
-        schedule = j.get("schedule", {})
-        kind = schedule.get("kind", "?")
-        if kind == "at":
-            sched_str = schedule.get("at", "?")
-        elif kind == "every":
-            sec = schedule.get("interval_seconds", "?")
-            sched_str = f"every {sec}s"
-        else:
-            sched_str = schedule.get("expr", "?")
-        end_at = schedule.get("end_at")
-        if end_at:
-            sched_str = f"{sched_str} (until {end_at})"
-        next_run = j.get("next_run_at", "?")
-        lines.append(f"  - {name} (id: {job_id})")
-        lines.append(f"    Schedule: {sched_str}")
-        lines.append(f"    Next run: {next_run}")
+        lines.append(f"  - {j['name']} (id: {j['id']})")
+        lines.append(f"    Schedule: {_describe(j['schedule'])}")
+        lines.append(f"    Next run: {j['next_run_at']}")
     return "\n".join(lines)
 
 

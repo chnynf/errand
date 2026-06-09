@@ -169,15 +169,6 @@ class Memory:
     def set_context_summary(self, summary: Optional[str]) -> None:
         self.data["context_summary"] = summary
 
-    def set_delivery_target(self, target: str) -> None:
-        """Set the delivery target for this session (e.g. discord:channel:123)."""
-        if "metadata" not in self.data:
-            self.data["metadata"] = {}
-        self.data["metadata"]["delivery_target"] = target
-
-    def get_delivery_target(self) -> Optional[str]:
-        return self.data.get("metadata", {}).get("delivery_target")
-
     def last_activity_at(self) -> Optional[float]:
         history = self.data.get("history") or []
         if history:
@@ -225,8 +216,6 @@ class Memory:
         if working_trace:
             parts.append(f"CURRENT TURN TRACE:\n{working_trace}")
 
-        parts.append(f"Current session ID (for scheduling): {self.session_id}")
-
         if working_trace:
             instruction = (
                 "The previous action has completed. Analyze the result above. "
@@ -241,6 +230,9 @@ class Memory:
     def _format_history_entry(role: str, content: Any) -> str:
         if role == "user":
             return f"USER: {content}"
+
+        if role == "scheduled":
+            return f"SCHEDULED TASK (firing now): {content}"
 
         def _format_ai_like_dict(payload: dict) -> str:
             tool_calls = payload.get("tool_calls") or []

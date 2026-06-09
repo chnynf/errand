@@ -32,6 +32,10 @@ from errand.tools.registry import ToolRegistry
 MAX_TOOL_ROUNDS = 8
 MAX_RESPONSE_RETRIES = 3
 
+# Tools a job is forbidden from calling while it is itself executing, so a
+# scheduled run can never (re)schedule and spin into an infinite loop.
+_SCHEDULED_RUN_BLOCKED_TOOLS = {"schedule_message"}
+
 
 class AgentLoop:
     """The think/act loop for one persisted session."""
@@ -68,9 +72,10 @@ class AgentLoop:
     ) -> str:
         """Process a single user interaction and return the final response."""
         is_subagent = bool(metadata and metadata.get("is_subagent"))
+        is_scheduled = bool(metadata and metadata.get("is_scheduled_task"))
         input_title = "Parent Agent -> Loop" if is_subagent else "User -> Loop"
         debug_log(input_title, user_input, extra=f"agent={self.agent_id}", truncate=False)
-        self.memory.add_history("user", user_input)
+        self.memory.add_history("scheduled" if is_scheduled else "user", user_input)
 
         reply_to = (metadata or {}).get("_reply_to")
 
@@ -84,6 +89,10 @@ class AgentLoop:
         final_response = ""
 
         tool_definitions = self.tool_registry.get_tool_definitions()
+        if is_scheduled:
+            tool_definitions = [
+                t for t in tool_definitions if t.name not in _SCHEDULED_RUN_BLOCKED_TOOLS
+            ]
         action_count = 0
         force_respond = False
         hit_tool_cap = False

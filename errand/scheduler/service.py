@@ -1,10 +1,10 @@
 """Scheduler service owned by the Errand runtime."""
 
 import asyncio
-from datetime import datetime, timezone
+import time
 from typing import Protocol
 
-from errand.scheduler.schedule import next_run_after_trigger
+from errand.scheduler.schedule import next_run_after_trigger, now_iso
 from errand.scheduler.store import JobStore
 
 
@@ -21,10 +21,6 @@ class ScheduledApp(Protocol):
         context_id: str | None = None,
     ) -> bool:
         """Deliver scheduled output through an available interface."""
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class SchedulerService:
@@ -67,54 +63,46 @@ class SchedulerService:
     async def run_tick(self) -> None:
         """Check for due jobs, mark them triggered, run each, deliver results."""
         self._store.purge_done()
-        now_ts = datetime.now(timezone.utc).timestamp()
-        now_iso = _iso_now()
-        due = self._store.get_due(now_ts)
+        now = now_iso()
+        due = self._store.get_due(time.time())
         if not due:
             return
 
         for job in due:
-            job_id = job["id"]
-            task_session_id = job["session_id"]
-            delivery_session_id = job.get("delivery_session_id") or job.get(
-                "delivery_target", ""
-            ).split(":")[-1]
-            message = job["message"]
-            name = job.get("name", "Scheduled task")
             schedule = job["schedule"]
-            kind = schedule.get("kind")
-            intent = job.get("intent", "execute")
+            task_session_id = job["session_id"]
 
-            next_run = next_run_after_trigger(schedule, now_iso)
-            if kind == "at":
-                self._store.update(job_id, last_run_at=now_iso, enabled=False)
-            elif next_run:
-                self._store.update(job_id, last_run_at=now_iso, next_run_at=next_run)
+            # Recurring jobs advance to their next fire; one-shots and expired
+            # recurrences are retired.
+            next_run = (
+                None if schedule["kind"] == "at"
+                else next_run_after_trigger(schedule, now)
+            )
+            if next_run:
+                self._store.update(job["id"], last_run_at=now, next_run_at=next_run)
             else:
-                self._store.update(job_id, last_run_at=now_iso, enabled=False)
+                self._store.update(job["id"], last_run_at=now, enabled=False)
 
-            if intent == "say":
-                response = message
+            if job["intent"] == "say":
+                response = job["message"]
             else:
-                created_at = job.get("created_at", "earlier")
-                # PROMPT: scheduled-task trigger — provides context for a due scheduled job
+                # PROMPT: scheduled-task trigger — a due job firing now, framed as a
+                # task to carry out (never as the user speaking, never as a request to schedule).
                 prompt = (
-                    f'On {created_at}, I said "{message}", now is the time to execute, '
-                    "please respond. (Do not reschedule!)"
+                    f"A scheduled task you set on {job['created_at']} is firing now.\n"
+                    f"TASK: {job['message']}\n"
+                    "Carry it out now and report the result to the user. "
+                    "This is not a request to schedule anything; do not create, modify, or repeat any schedule."
                 )
                 try:
                     response = await self._app.process_scheduled_job(
-                        task_session_id,
-                        prompt,
-                        name=name,
+                        task_session_id, prompt, name=job["name"],
                     )
                 except Exception as e:
                     response = f"Error running scheduled task: {e}"
 
             delivered = await self._app.deliver_scheduled_result(
-                task_session_id,
-                response,
-                context_id=delivery_session_id,
+                task_session_id, response, context_id=job["delivery_session_id"],
             )
             if not delivered:
                 print(f"Scheduler delivery failed: no interface handled {task_session_id}")

@@ -2,15 +2,12 @@
 
 import json
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from errand.scheduler.schedule import now_iso, parse_iso
+
 _JOBS_FILE = Path(__file__).resolve().parent / "jobs.json"
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _default_data() -> dict:
@@ -50,7 +47,7 @@ class JobStore:
         """Add a new job. session_id is the kernel session for the task; delivery_session_id is where to deliver."""
         job_id = f"job-{uuid.uuid4().hex[:12]}"
         task_session_id = f"scheduled:{job_id}"
-        now = _iso_now()
+        now = now_iso()
         job = {
             "id": job_id,
             "name": name,
@@ -69,12 +66,6 @@ class JobStore:
         self._save(data)
         return job
 
-    def get(self, job_id: str) -> Optional[dict]:
-        for job in self._load()["jobs"]:
-            if job["id"] == job_id:
-                return job.copy()
-        return None
-
     def list_enabled(self) -> list[dict]:
         return [j for j in self._load()["jobs"] if j.get("enabled", True)]
 
@@ -82,14 +73,9 @@ class JobStore:
         """Get enabled jobs whose next_run_at <= now."""
         due = []
         for j in self.list_enabled():
-            next_run = j.get("next_run_at")
-            if next_run:
-                try:
-                    dt = datetime.fromisoformat(next_run.replace("Z", "+00:00"))
-                    if dt.timestamp() <= now_ts:
-                        due.append(j.copy())
-                except (ValueError, TypeError):
-                    pass
+            dt = parse_iso(j.get("next_run_at"))
+            if dt and dt.timestamp() <= now_ts:
+                due.append(j.copy())
         return due
 
     def update(

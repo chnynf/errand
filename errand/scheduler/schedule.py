@@ -1,132 +1,97 @@
-"""Schedule validation and next-run computation. AI provides pre-parsed values."""
+"""Schedule validation and next-run computation. The AI supplies pre-parsed values."""
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-
-def validate_at(value: str) -> bool:
-    """Validate ISO 8601 timestamp. AI provides pre-parsed value."""
-    if not value or not isinstance(value, str):
-        return False
-    try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return True
-    except (ValueError, TypeError):
-        return False
+_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
-def parse_every(value: str | int) -> Optional[int]:
-    """Parse interval to seconds. Accepts 3600, '3600', '1h', '1d', '30m'."""
-    if isinstance(value, int):
-        return value if value > 0 else None
-    s = str(value).strip().lower()
-    if not s:
+def parse_iso(value: object) -> Optional[datetime]:
+    """Parse an ISO 8601 string into an aware UTC datetime, or None."""
+    if not isinstance(value, str) or not value.strip():
         return None
     try:
-        n = int(s)
-        return n if n > 0 else None
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
-        pass
-    m = re.match(r"^(\d+)\s*(s|m|h|d)$", s)
-    if m:
-        num = int(m.group(1))
-        unit = m.group(2)
-        if unit == "s":
-            return num if num > 0 else None
-        if unit == "m":
-            return num * 60 if num > 0 else None
-        if unit == "h":
-            return num * 3600 if num > 0 else None
-        if unit == "d":
-            return num * 86400 if num > 0 else None
-    return None
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def validate_cron(expr: str) -> bool:
-    """Validate 5-field cron expression."""
+def format_iso(dt: datetime) -> str:
+    """Format a datetime as an ISO 8601 UTC string (e.g. 2025-02-24T09:00:00Z)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def now_iso() -> str:
+    """Current UTC time as an ISO 8601 string."""
+    return format_iso(datetime.now(timezone.utc))
+
+
+def _next_cron(expr: object, after: datetime) -> Optional[datetime]:
+    if not isinstance(expr, str) or not expr.strip():
+        return None
     try:
         from croniter import croniter
 
-        croniter(expr, datetime.now(timezone.utc))
-        return True
+        return croniter(expr, after).get_next(datetime)
     except Exception:
-        return False
+        return None
+
+
+def validate_at(value: str) -> bool:
+    """Return True if value is a parseable ISO 8601 timestamp."""
+    return parse_iso(value) is not None
+
+
+def parse_every(value: str | int) -> Optional[int]:
+    """Parse an interval to positive seconds. Accepts 3600, '3600', '1h', '30m', '1d'."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    m = re.fullmatch(r"(\d+)\s*([smhd]?)", str(value).strip().lower())
+    if not m:
+        return None
+    return int(m.group(1)) * _UNITS[m.group(2) or "s"] or None
+
+
+def validate_cron(expr: str) -> bool:
+    """Return True if expr is a valid 5-field cron expression."""
+    return _next_cron(expr, datetime.now(timezone.utc)) is not None
 
 
 def next_run_at(schedule: dict, from_ts: Optional[float] = None) -> Optional[str]:
-    """Compute next run time as ISO 8601 UTC string."""
-    now = datetime.now(timezone.utc)
-    if from_ts is not None:
-        now = datetime.fromtimestamp(from_ts, tz=timezone.utc)
+    """Compute the next run time as an ISO 8601 UTC string, honoring end_at."""
+    now = (
+        datetime.fromtimestamp(from_ts, timezone.utc)
+        if from_ts is not None
+        else datetime.now(timezone.utc)
+    )
+    end_raw = schedule.get("end_at")
+    end_dt = parse_iso(end_raw) if end_raw else None
+    if end_raw and end_dt is None:
+        return None
 
     kind = schedule.get("kind")
-    if not kind:
-        return None
-    end_at = schedule.get("end_at")
-    end_at_dt = None
-    if end_at:
-        try:
-            end_at_dt = datetime.fromisoformat(str(end_at).replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return None
-
     if kind == "at":
-        at = schedule.get("at")
-        if not at:
-            return None
-        if end_at_dt is None:
-            return at
-        try:
-            at_dt = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return None
-        return at if at_dt <= end_at_dt else None
+        nxt = parse_iso(schedule.get("at"))
+    elif kind == "every":
+        seconds = schedule.get("interval_seconds") or 0
+        nxt = now + timedelta(seconds=seconds) if seconds > 0 else None
+    elif kind == "cron":
+        nxt = _next_cron(schedule.get("expr"), now)
+    else:
+        nxt = None
 
-    if kind == "every":
-        interval = schedule.get("interval_seconds")
-        if not interval or interval <= 0:
-            return None
-        base_ts = from_ts or now.timestamp()
-        next_ts = base_ts + interval
-        next_dt = datetime.fromtimestamp(next_ts, tz=timezone.utc)
-        if end_at_dt is not None and next_dt > end_at_dt:
-            return None
-        return next_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    if kind == "cron":
-        expr = schedule.get("expr")
-        if not expr:
-            return None
-        tz_str = schedule.get("tz")
-        try:
-            from croniter import croniter
-
-            if tz_str:
-                import zoneinfo
-
-                tz = zoneinfo.ZoneInfo(tz_str)
-                base = now.astimezone(tz)
-                cron = croniter(expr, base)
-            else:
-                cron = croniter(expr, now)
-            next_dt = cron.get_next(datetime)
-            if next_dt.tzinfo is None:
-                next_dt = next_dt.replace(tzinfo=timezone.utc)
-            next_dt_utc = next_dt.astimezone(timezone.utc)
-            if end_at_dt is not None and next_dt_utc > end_at_dt:
-                return None
-            return next_dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            return None
-
-    return None
+    if nxt is None or (end_dt is not None and nxt > end_dt):
+        return None
+    return format_iso(nxt)
 
 
 def next_run_after_trigger(schedule: dict, last_run_at: str) -> Optional[str]:
-    """Compute next_run_at for recurring jobs after a trigger."""
-    try:
-        dt = datetime.fromisoformat(last_run_at.replace("Z", "+00:00"))
-        return next_run_at(schedule, from_ts=dt.timestamp())
-    except (ValueError, TypeError):
-        return None
+    """Compute next_run_at for a recurring job after a trigger fired."""
+    dt = parse_iso(last_run_at)
+    return next_run_at(schedule, from_ts=dt.timestamp()) if dt else None
