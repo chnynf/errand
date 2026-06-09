@@ -12,6 +12,7 @@ Given a session's persisted memory and a fresh user input, the loop:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from typing import List, Optional
@@ -166,48 +167,39 @@ class AgentLoop:
                     f"Round {action_count}/{MAX_TOOL_ROUNDS}: {tool_names}",
                     extra=f"agent={self.agent_id}",
                 )
-                last_tool_results = []
-                for tc in tool_calls:
-                    action_name = tc.name
-                    params = tc.params
-                    if action_name:
-                        round_tools_used.append(action_name)
-                        try:
-                            debug_log(
-                                "Loop Execution",
-                                f"Executing tool: {action_name}({params})",
-                                extra=f"agent={self.agent_id}",
-                            )
-                            result = await self.tool_registry.execute(
-                                action_name,
-                                params,
-                                context={
-                                    "agent_id": self.agent_id,
-                                    "session_id": self.memory.session_id,
-                                    "delegation_depth": self.delegation_depth,
-                                    "debug": self.debug,
-                                    "reply_to": (metadata or {}).get("_reply_to"),
-                                    "source": (metadata or {}).get("_source"),
-                                },
-                            )
-                            last_tool_results.append(
-                                ToolResult(
-                                    tool_call_id=tc.id,
-                                    name=action_name,
-                                    content=str(result),
-                                )
-                            )
-                            if action_name == "schedule_message":
-                                scheduled_messages.append(str(result))
-                        except Exception as e:
-                            error_msg = f"Tool '{action_name}' execution failed: {str(e)}"
-                            last_tool_results.append(
-                                ToolResult(
-                                    tool_call_id=tc.id,
-                                    name=action_name,
-                                    content=error_msg,
-                                )
-                            )
+                async def _run_tool(tc: ToolCall) -> ToolResult:
+                    debug_log(
+                        "Loop Execution",
+                        f"Executing tool: {tc.name}({tc.params})",
+                        extra=f"agent={self.agent_id}",
+                    )
+                    try:
+                        result = await self.tool_registry.execute(
+                            tc.name,
+                            tc.params,
+                            context={
+                                "agent_id": self.agent_id,
+                                "session_id": self.memory.session_id,
+                                "delegation_depth": self.delegation_depth,
+                                "debug": self.debug,
+                                "reply_to": (metadata or {}).get("_reply_to"),
+                                "source": (metadata or {}).get("_source"),
+                            },
+                        )
+                        return ToolResult(tool_call_id=tc.id, name=tc.name, content=str(result))
+                    except Exception as e:
+                        return ToolResult(
+                            tool_call_id=tc.id,
+                            name=tc.name,
+                            content=f"Tool '{tc.name}' execution failed: {e}",
+                        )
+
+                round_tools_used.extend(tc.name for tc in tool_calls if tc.name)
+                last_tool_results = await asyncio.gather(*(_run_tool(tc) for tc in tool_calls))
+                last_tool_results = list(last_tool_results)
+                for tr in last_tool_results:
+                    if tr.name == "schedule_message" and not tr.content.startswith("Tool '"):
+                        scheduled_messages.append(tr.content)
 
                 if last_tool_results:
                     self.memory.add_tool_results(tool_calls, last_tool_results)
