@@ -70,10 +70,9 @@ class Memory:
 
     History roles:
         user    -- user's input
+        scheduled -- scheduled task firing through the agent
         ai      -- AI response (tool_calls or text), with model in metadata
         tool    -- tool execution results
-        brain   -- legacy alias for ``ai`` (kept readable from old sessions)
-        system  -- internal tool feedback messages
     """
 
     def __init__(self, session_id: str = "default", agent_id: str = "default"):
@@ -181,102 +180,91 @@ class Memory:
     def clear_session_note(self) -> None:
         self.data.setdefault("metadata", {}).pop("session_note", None)
 
-    def get_formatted_context(
-        self,
-        recent_n: int = 20,
-        working_trace: Optional[str] = None,
-    ) -> tuple[str, str]:
-        """Build prompt context from summary, visible conversation, and trace."""
-        parts = []
-
-        ctx_summary = self.data.get("context_summary")
-        if ctx_summary:
-            parts.append(f"CONTEXT SUMMARY:\n{ctx_summary}")
-
-        session_note = self.data.get("metadata", {}).get("session_note")
-        if session_note:
-            parts.append(f"SESSION NOTE:\n{session_note}")
-
-        history = self.data["history"]
-        visible = [
-            line
-            for entry in history
-            if (
-                line := self._format_history_entry(
-                    entry.get("role", "unknown"),
-                    entry.get("content", ""),
-                )
-            )
-        ]
-        recent = visible[-recent_n:]
-
-        if recent:
-            parts.append("RECENT CONVERSATION:\n" + "\n".join(recent))
-
-        if working_trace:
-            parts.append(f"CURRENT TURN TRACE:\n{working_trace}")
-
-        if working_trace:
-            instruction = (
-                "The previous action has completed. Analyze the result above. "
-                "Decide whether to take another action or respond to the user."
-            )
-        else:
-            instruction = "Analyze the user's input. Decide whether to call a tool or respond directly."
-
-        return "\n\n".join(parts), instruction
+    def build_history_messages(self, recent_n: int = 20) -> list[dict]:
+        """Build role-tagged chat messages from persisted compact history."""
+        messages: list[dict] = []
+        history = self.data["history"][-recent_n:]
+        i = 0
+        while i < len(history):
+            entry = history[i]
+            role = entry["role"]
+            content = entry["content"]
+            if role in ("user", "scheduled"):
+                messages.append({"role": "user", "content": str(content)})
+                i += 1
+            elif role == "ai":
+                msg = self._ai_message(content)
+                if msg and not msg.get("tool_calls"):
+                    messages.append(msg)
+                elif msg and i + 1 < len(history) and history[i + 1]["role"] == "tool":
+                    tool_messages = self._matching_tool_messages(
+                        msg["tool_calls"],
+                        history[i + 1]["content"],
+                    )
+                    if len(tool_messages) == len(msg["tool_calls"]):
+                        messages.append(msg)
+                        messages.extend(tool_messages)
+                        i += 1
+                i += 1
+            elif role == "tool":
+                # A dangling compact tool entry means the recent history slice
+                # lost its assistant tool-call entry. Skip it rather than
+                # sending an invalid OpenAI message sequence.
+                i += 1
+            else:
+                i += 1
+        return messages
 
     @staticmethod
-    def _format_history_entry(role: str, content: Any) -> str:
-        if role == "user":
-            return f"USER: {content}"
+    def _ai_message(content: Any) -> dict | None:
+        if not isinstance(content, dict):
+            return {"role": "assistant", "content": str(content)}
+        tool_calls = content.get("tool_calls") or []
+        if tool_calls:
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": json.dumps(call.get("params", {})),
+                        },
+                    }
+                    for call in tool_calls
+                ],
+            }
+        text = content.get("text_response")
+        return {"role": "assistant", "content": text} if text else None
 
-        if role == "scheduled":
-            return f"SCHEDULED TASK (firing now): {content}"
+    @classmethod
+    def _matching_tool_messages(cls, tool_calls: list[dict], records: Any) -> list[dict]:
+        expected_ids = {call["id"] for call in tool_calls}
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": record["tool_call_id"],
+                "content": cls._render_tool_record(record),
+            }
+            for record in records
+            if record["tool_call_id"] in expected_ids
+        ]
 
-        def _format_ai_like_dict(payload: dict) -> str:
-            tool_calls = payload.get("tool_calls") or []
-            if tool_calls:
-                descs = []
-                for c in tool_calls:
-                    params_str = ", ".join(
-                        f"{k}={v!r}" for k, v in c.get("params", {}).items()
-                    )
-                    descs.append(f"{c.get('name', '?')}({params_str})")
-                return "AI: [tool call] " + "; ".join(descs)
-            text = payload.get("text_response") or payload.get("external_response")
-            if text:
-                return f"AI: {text}"
-            return f"AI: {json.dumps(payload, ensure_ascii=False)}"
-
-        if role == "ai":
-            if isinstance(content, dict):
-                if content.get("tool_calls"):
-                    names = ", ".join(
-                        c.get("name", "?") for c in content["tool_calls"]
-                    )
-                    return f"AI: [tools: {names}]"
-                ctype = content.get("type", "")
-                if ctype == "tool_calls":
-                    return ""
-                if ctype == "text":
-                    return f"AI: {content.get('text', '')}"
-                return _format_ai_like_dict(content)
-            return f"AI: {content}"
-
-        if role == "tool":
-            return ""
-
-        if role == "brain":
-            if isinstance(content, dict):
-                if content.get("type") == "tool_calls" or content.get("tool_calls"):
-                    return ""
-                return _format_ai_like_dict(content)
-            return f"AI: {content}"
-        if role == "system":
-            return ""
-
-        return ""
+    @staticmethod
+    def _render_tool_record(record: dict[str, Any]) -> str:
+        if record.get("error"):
+            return str(record["error"])
+        if record.get("preview"):
+            return str(record["preview"])
+        if ref := record.get("result_ref"):
+            scope = ref.get("scope", "kb")
+            path = ref.get("path", "")
+            chars = record.get("content_chars", 0)
+            return f"{record['name']}: result stored as {ref['type']} ref {scope}:{path} ({chars} chars)"
+        if "entry_count" in record:
+            return f"{record['name']}: {record['entry_count']} entries"
+        return f"{record['name']}: {record.get('content_chars', 0)} chars"
 
     @staticmethod
     def _compact_tool_result(

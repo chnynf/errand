@@ -23,7 +23,8 @@ def test_idle_boundary_marks_next_turn_context(monkeypatch, tmp_path):
     session._loop.memory.data["history"][-1]["timestamp"] = time.time() - 7200
 
     manager._mark_idle_boundary(session)
-    context, _ = session._loop.memory.get_formatted_context()
 
-    assert f"SESSION NOTE:\n{IDLE_BOUNDARY_NOTE}" in context
-    assert "USER: old topic" in context
+    assert session._loop.memory.data["metadata"]["session_note"] == IDLE_BOUNDARY_NOTE
+    assert session._loop.memory.build_history_messages() == [
+        {"role": "user", "content": "old topic"}
+    ]

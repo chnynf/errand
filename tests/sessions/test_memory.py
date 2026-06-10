@@ -7,7 +7,7 @@ from errand.sessions.memory import (
 )
 
 
-def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
+def test_history_messages_use_roles_without_persisted_file_contents(
     monkeypatch,
     tmp_path,
 ):
@@ -54,17 +54,18 @@ def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
     )
     memory.set_context_summary("Profile loaded from INDEX.md.")
 
-    context, instruction = memory.get_formatted_context()
+    messages = memory.build_history_messages()
 
-    assert "CONTEXT SUMMARY:\nProfile loaded from INDEX.md." in context
-    assert "USER: Read the profile." in context
-    assert "AI: I loaded the profile." in context
-    assert "# Agent KB" not in context
-    assert "secret soul" not in context
-    assert "TOOL RESULT" not in context
-    assert instruction == (
-        "Analyze the user's input. Decide whether to call a tool or respond directly."
-    )
+    assert messages[0] == {"role": "user", "content": "Read the profile."}
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["tool_calls"][0]["id"] == "tc-1"
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "read_file"
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["tool_call_id"] == "tc-1"
+    assert "kb:INDEX.md" in messages[2]["content"]
+    assert "# Agent KB" not in messages[2]["content"]
+    assert "secret soul" not in messages[2]["content"]
+    assert messages[3] == {"role": "assistant", "content": "I loaded the profile."}
 
     tool_entry = next(entry for entry in memory.data["history"] if entry["role"] == "tool")
     stored_result = tool_entry["content"][0]
@@ -76,19 +77,19 @@ def test_prompt_context_uses_visible_conversation_not_persisted_file_contents(
     assert "secret soul" not in str(stored_result)
 
 
-def test_working_trace_is_available_for_current_turn_only(monkeypatch, tmp_path):
+def test_scheduled_history_renders_as_user_message(monkeypatch, tmp_path):
     monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
-    memory.add_history("user", "Read the profile.")
+    memory.add_history("scheduled", "A scheduled task is firing now.\nTASK: water plants")
 
-    context, instruction = memory.get_formatted_context(
-        working_trace="Tool result: read_file(path='INDEX.md')\n# Agent KB\nsecret soul"
-    )
+    messages = memory.build_history_messages()
 
-    assert "CURRENT TURN TRACE:" in context
-    assert "# Agent KB" in context
-    assert "secret soul" in context
-    assert instruction.startswith("The previous action has completed.")
+    assert messages == [
+        {
+            "role": "user",
+            "content": "A scheduled task is firing now.\nTASK: water plants",
+        }
+    ]
 
 
 def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
@@ -96,10 +97,9 @@ def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
     memory = Memory("test-session")
 
     memory.add_session_note(IDLE_BOUNDARY_NOTE)
-    context, _ = memory.get_formatted_context()
 
-    assert f"SESSION NOTE:\n{IDLE_BOUNDARY_NOTE}" in context
-    assert "USER:" not in context
+    assert memory.data["metadata"]["session_note"] == IDLE_BOUNDARY_NOTE
+    assert memory.build_history_messages() == []
 
 
 def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_path):

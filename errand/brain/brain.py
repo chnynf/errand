@@ -22,9 +22,7 @@ from errand.brain.providers import ProviderRegistry
 from errand.config import AgentSpec, FileAccessConfig, ErrandConfig, load_raw_config
 from errand.contracts.types import (
     BrainDecision,
-    ToolCall,
     ToolDefinition,
-    ToolResult,
 )
 from errand.runtime.debug import debug_log, debug_log_prompt, set_debug
 
@@ -95,13 +93,27 @@ class Brain:
             ),
         )
 
-        self._last_provider_name: Optional[str] = None
-        self._last_model_key: Optional[str] = None
-        self._last_model: Optional[str] = None
-        self._last_call_overrides: Dict[str, Any] = {}
-
     def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
         self.prompt_assembler.reload_resources(soul=soul, profile=profile)
+
+    def build_messages(
+        self,
+        history_messages: list[dict],
+        *,
+        context_summary: str | None = None,
+        session_note: str | None = None,
+        instruction: str | None = None,
+    ) -> list[dict]:
+        """Build the full message list for one model call."""
+        return [
+            {"role": "system", "content": self.prompt_assembler.build_system_prompt()},
+            *self.prompt_assembler.build_context_messages(
+                context_summary=context_summary,
+                session_note=session_note,
+                instruction=instruction,
+            ),
+            *history_messages,
+        ]
 
     def _resolve_model(
         self, model_key: str
@@ -130,8 +142,7 @@ class Brain:
 
     async def decide(
         self,
-        context_text: str,
-        instruction: str,
+        messages: list[dict],
         tool_definitions: Optional[List[ToolDefinition]] = None,
         skip_providers: Optional[List[str]] = None,
         skip_model_keys: Optional[List[str]] = None,
@@ -168,23 +179,19 @@ class Brain:
                 continue
 
             try:
-                system_prompt = self.prompt_assembler.build_system_prompt()
-                user_prompt = self.prompt_assembler.build_user_prompt(context_text, instruction)
                 tool_names = [td.name for td in tool_definitions] if tool_definitions else []
 
                 debug_log_prompt(
-                    f"Loop({self.agent_id}) -> AI", system_prompt, user_prompt,
+                    f"Loop({self.agent_id}) -> AI", messages,
                     model=actual_model, extra=log_extra or "native tools",
                     tool_names=tool_names,
                     session_id=session_id,
                     agent_id=self.agent_id,
-                    instruction=instruction,
                 )
 
-                decision, usage_data = await provider.generate_with_tools(
+                decision, usage_data = await provider.generate(
                     model=actual_model,
-                    system_prompt=system_prompt,
-                    prompt=user_prompt,
+                    messages=messages,
                     tool_definitions=tool_definitions or [],
                     **overrides,
                 )
@@ -201,10 +208,6 @@ class Brain:
                 usage_data["pricing"] = (self.models_config.get(model_key) or {}).get("pricing")
 
                 if decision.tool_calls:
-                    self._last_provider_name = provider_name
-                    self._last_model_key = model_key
-                    self._last_model = actual_model
-                    self._last_call_overrides = overrides
                     tc_desc = "; ".join(
                         f"{tc.name}({', '.join(f'{k}={v!r}' for k, v in tc.params.items())})"
                         for tc in decision.tool_calls
@@ -215,7 +218,6 @@ class Brain:
                         model=actual_model,
                     )
                 else:
-                    self._last_provider_name = None
                     preview = (decision.text_response or "")[:300]
                     body = f"Text: {preview}"
                     if decision.context_summary:
@@ -260,106 +262,3 @@ class Brain:
             "error": True,
             "error_message": str(last_exception),
         }
-
-    async def submit_tool_results(
-        self,
-        tool_calls: List[ToolCall],
-        tool_results: List[ToolResult],
-        tool_definitions: List[ToolDefinition],
-        fallback_context: str,
-        fallback_instruction: str,
-        prompt_context: Optional[str] = None,
-        prompt_instruction: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Send tool results back to the AI.
-
-        Tries the provider that issued the tool calls (native continuation).
-        On failure, falls back to decide() with the failed vendor skipped.
-        """
-        if self._last_provider_name and self._last_model_key:
-            provider_name = self._last_provider_name
-            provider = ProviderRegistry.get_provider(provider_name)
-            _, actual_model, _, overrides = self._resolve_model(self._last_model_key)
-
-            tr_desc = "; ".join(f"{tr.name} -> {tr.content[:80]}" for tr in tool_results)
-            debug_log(
-                f"Loop({self.agent_id}) -> AI", tr_desc,
-                model=actual_model, extra="tool results",
-            )
-
-            try:
-                system_prompt = self.prompt_assembler.build_system_prompt()
-
-                p_ctx = prompt_context if prompt_context is not None else fallback_context
-                p_inst = prompt_instruction if prompt_instruction is not None else fallback_instruction
-                user_prompt = self.prompt_assembler.build_user_prompt(p_ctx, p_inst)
-
-                decision, usage_data = await provider.continue_with_tool_results(
-                    model=actual_model,
-                    system_prompt=system_prompt,
-                    prompt=user_prompt,
-                    tool_calls=tool_calls,
-                    tool_results=tool_results,
-                    tool_definitions=tool_definitions,
-                    **overrides,
-                )
-
-                if not decision.tool_calls and not (
-                    decision.text_response and decision.text_response.strip()
-                ):
-                    raise ValueError(
-                        "AI returned empty response (no tool calls and no text response)."
-                    )
-
-                usage_data["model"] = actual_model
-                usage_data["model_key"] = self._last_model_key
-                usage_data["pricing"] = (
-                    self.models_config.get(self._last_model_key) or {}
-                ).get("pricing")
-
-                if decision.tool_calls:
-                    self._last_provider_name = provider_name
-                    tc_desc = "; ".join(
-                        f"{tc.name}({', '.join(f'{k}={v!r}' for k, v in tc.params.items())})"
-                        for tc in decision.tool_calls
-                    )
-                    debug_log(
-                        f"AI -> Loop({self.agent_id})",
-                        f"Tool call: {tc_desc}",
-                        model=actual_model,
-                    )
-                else:
-                    self._last_provider_name = None
-                    preview = (decision.text_response or "")[:300]
-                    body = f"Text: {preview}"
-                    if decision.context_summary:
-                        body += f"\nContext: {decision.context_summary}"
-                    debug_log(f"AI -> Loop({self.agent_id})", body, model=actual_model)
-
-                return {"decision": decision, "usage": usage_data}
-
-            except Exception as e:
-                debug_log(
-                    "! FAILED",
-                    f"{e}\nRolling back -> retrying with next model...",
-                    model=actual_model,
-                )
-                failed_model_key = self._last_model_key
-                self._last_provider_name = None
-                self._last_model_key = None
-
-                return await self.decide(
-                    fallback_context,
-                    fallback_instruction,
-                    tool_definitions=tool_definitions,
-                    skip_model_keys=[failed_model_key] if failed_model_key else None,
-                    start_after_model_key=failed_model_key,
-                    log_extra="tool results (fallback)",
-                )
-
-        return await self.decide(
-            fallback_context,
-            fallback_instruction,
-            tool_definitions=tool_definitions,
-            log_extra="tool results (fallback)",
-        )

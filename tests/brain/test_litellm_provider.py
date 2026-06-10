@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from errand.brain.providers.litellm import LiteLLMProvider
-from errand.contracts.types import ToolCall, ToolDefinition, ToolResult
+from errand.contracts.types import ToolDefinition
 
 
 def _mk_response(
@@ -78,10 +78,12 @@ async def test_text_response_parses_context_summary(provider):
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
-        decision, usage = await provider.generate_with_tools(
+        decision, usage = await provider.generate(
             model="gemini/gemini-3-flash-preview",
-            system_prompt="soul",
-            prompt="What is 42?",
+            messages=[
+                {"role": "system", "content": "soul"},
+                {"role": "user", "content": "What is 42?"},
+            ],
             tool_definitions=[],
         )
 
@@ -110,10 +112,9 @@ async def test_cache_hit_tokens_from_prompt_tokens_details(provider):
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ):
-        _, usage = await provider.generate_with_tools(
+        _, usage = await provider.generate(
             model="openai/deepseek-ai/DeepSeek-V4-Flash",
-            system_prompt="soul",
-            prompt="hi",
+            messages=[{"role": "system", "content": "soul"}],
             tool_definitions=[],
         )
 
@@ -134,10 +135,9 @@ async def test_cache_hit_tokens_anthropic_fallback(provider):
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ):
-        _, usage = await provider.generate_with_tools(
+        _, usage = await provider.generate(
             model="anthropic/claude-3-5-sonnet",
-            system_prompt="soul",
-            prompt="hi",
+            messages=[{"role": "system", "content": "soul"}],
             tool_definitions=[],
         )
 
@@ -153,10 +153,12 @@ async def test_tool_call_parsing(provider, calculator_tool):
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
-        decision, usage = await provider.generate_with_tools(
+        decision, usage = await provider.generate(
             model="deepseek/deepseek-chat",
-            system_prompt="soul",
-            prompt="Compute 1+1",
+            messages=[
+                {"role": "system", "content": "soul"},
+                {"role": "user", "content": "Compute 1+1"},
+            ],
             tool_definitions=[calculator_tool],
         )
 
@@ -179,10 +181,12 @@ async def test_api_base_and_key_passthrough_for_openai_compatible(provider, calc
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
-        await provider.generate_with_tools(
+        await provider.generate(
             model="openai/deepseek-ai/DeepSeek-V3.2",
-            system_prompt="soul",
-            prompt="hello",
+            messages=[
+                {"role": "system", "content": "soul"},
+                {"role": "user", "content": "hello"},
+            ],
             tool_definitions=[calculator_tool],
             api_base="https://api.siliconflow.com/v1",
             api_key="sk-test-siliconflow",
@@ -193,21 +197,34 @@ async def test_api_base_and_key_passthrough_for_openai_compatible(provider, calc
     assert kwargs["api_key"] == "sk-test-siliconflow"
 
 
-async def test_continue_with_tool_results_builds_messages(provider, calculator_tool):
+async def test_generate_accepts_tool_result_messages(provider, calculator_tool):
     response = _mk_response(content="Final answer: 2")
-    tool_calls = [ToolCall(id="tc-1", name="calculate", params={"expression": "1+1"})]
-    tool_results = [ToolResult(tool_call_id="tc-1", name="calculate", content="2")]
+    request_messages = [
+        {"role": "system", "content": "soul"},
+        {"role": "user", "content": "Compute 1+1"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "type": "function",
+                    "function": {
+                        "name": "calculate",
+                        "arguments": json.dumps({"expression": "1+1"}),
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tc-1", "content": "2"},
+    ]
 
     with patch(
         "errand.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
-        decision, _ = await provider.continue_with_tool_results(
+        decision, _ = await provider.generate(
             model="gemini/gemini-3-flash-preview",
-            system_prompt="soul",
-            prompt="Compute 1+1",
-            tool_calls=tool_calls,
-            tool_results=tool_results,
+            messages=request_messages,
             tool_definitions=[calculator_tool],
         )
 
@@ -222,28 +239,6 @@ async def test_continue_with_tool_results_builds_messages(provider, calculator_t
     assert messages[3] == {"role": "tool", "tool_call_id": "tc-1", "content": "2"}
 
     assert decision.text_response == "Final answer: 2"
-
-
-async def test_generate_decision_json_mode_strips_fences(provider):
-    response = _mk_response(content='```json\n{"actions": [], "external_response": "hi"}\n```')
-    schema = {"type": "object"}
-    with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
-        new=AsyncMock(return_value=response),
-    ) as mock:
-        raw, usage = await provider.generate_decision(
-            model="deepseek/deepseek-reasoner",
-            system_prompt="soul",
-            prompt="say hi",
-            response_schema=schema,
-        )
-
-    kwargs = mock.await_args.kwargs
-    assert kwargs["response_format"] == {"type": "json_object"}
-    assert "OUTPUT FORMAT" in kwargs["messages"][0]["content"][0]["text"]
-
-    assert raw == {"actions": [], "external_response": "hi"}
-    assert usage == {"input_tokens": 10, "output_tokens": 5, "cache_creation_tokens": 0, "cache_read_tokens": 0}
 
 
 def test_is_retryable_classifies_known_litellm_errors(provider):

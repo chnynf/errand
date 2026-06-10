@@ -1,4 +1,4 @@
-"""Assemble system and user prompts for the model.
+"""Assemble system prompt and per-turn context messages for the model.
 
 The system prompt is intentionally small. It tells the agent:
 - it is running inside Errand
@@ -94,9 +94,22 @@ class PromptAssembler:
 
         return "\n\n".join(parts)
 
-    def build_user_prompt(self, context_text: str, instruction: str) -> str:
-        """Wrap session context and the per-turn instruction for the model."""
-        return f"{_current_context()}\n\nSESSION CONTEXT:\n{context_text}\n\nINSTRUCTION:\n{instruction}"
+    def build_context_messages(
+        self,
+        *,
+        context_summary: str | None = None,
+        session_note: str | None = None,
+        instruction: str | None = None,
+    ) -> list[dict]:
+        """Build volatile per-turn context messages outside the cached system prompt."""
+        parts = [_current_context()]
+        if context_summary:
+            parts.append(f"CONTEXT SUMMARY:\n{context_summary}")
+        if session_note:
+            parts.append(f"SESSION NOTE:\n{session_note}")
+        if instruction:
+            parts.append(f"INSTRUCTION:\n{instruction}")
+        return [{"role": "user", "content": "\n\n".join(parts)}]
 
     def _file_access_section(self) -> str:
         lines = [

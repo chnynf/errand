@@ -17,10 +17,13 @@ def test_system_prompt_stable_no_current_context():
     assert "Errand Runtime" in prompt
 
 
-def test_user_prompt_includes_current_context():
+def test_context_messages_include_current_context():
     assembler = PromptAssembler()
-    prompt = assembler.build_user_prompt("ctx body", "do thing")
-    assert "CURRENT CONTEXT:" in prompt
+    messages = assembler.build_context_messages()
+    assert messages[0]["role"] == "user"
+    assert "CURRENT CONTEXT:" in messages[0]["content"]
+    assert "US East:" in messages[0]["content"]
+    assert "UTC:" in messages[0]["content"]
 
 
 def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
@@ -122,11 +125,16 @@ def test_soul_and_profile_blocks_are_cached(tmp_path):
     assert assembler._soul_block == cached
 
 
-def test_user_prompt_layout():
+def test_context_messages_include_summary_note_and_instruction():
     assembler = PromptAssembler()
-    prompt = assembler.build_user_prompt("ctx body", "do thing")
-    assert "CURRENT CONTEXT:" in prompt
-    assert "SESSION CONTEXT:\nctx body" in prompt
-    assert "INSTRUCTION:\ndo thing" in prompt
-    # CURRENT CONTEXT must appear before SESSION CONTEXT
-    assert prompt.index("CURRENT CONTEXT:") < prompt.index("SESSION CONTEXT:")
+    messages = assembler.build_context_messages(
+        context_summary="ctx body",
+        session_note="note body",
+        instruction="do thing",
+    )
+    content = messages[0]["content"]
+    assert "CURRENT CONTEXT:" in content
+    assert "CONTEXT SUMMARY:\nctx body" in content
+    assert "SESSION NOTE:\nnote body" in content
+    assert "INSTRUCTION:\ndo thing" in content
+    assert content.index("CURRENT CONTEXT:") < content.index("CONTEXT SUMMARY:")

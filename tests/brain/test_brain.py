@@ -4,8 +4,7 @@ Covers:
 - `_resolve_model` reads `litellm_model`, `api_base`, and resolves
   `api_key_env` from environment.
 - `decide` falls through `model_strategy` on retryable errors.
-- `submit_tool_results` retries via `decide` when the native
-  continuation fails, and skips the failed vendor.
+- `decide` can resume after a failed model key for continuation-style retries.
 
 LiteLLM is mocked at the module level used by the provider so no
 network is touched. Config is patched onto the `Brain` instance.
@@ -18,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from errand.brain import Brain
-from errand.contracts.types import ToolCall, ToolDefinition, ToolResult
+from errand.contracts.types import ToolDefinition
 
 
 def _mk_response(*, content=None, tool_calls=None):
@@ -120,8 +119,7 @@ async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
         new=mock_acompletion,
     ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.decide(
-            context_text="ctx",
-            instruction="instr",
+            messages=[{"role": "system", "content": "soul"}, {"role": "user", "content": "hi"}],
             tool_definitions=[tool_def],
         )
 
@@ -142,50 +140,45 @@ async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
     assert usage["model"] == "openai/deepseek-ai/DeepSeek-V3"
 
 
-async def test_submit_tool_results_falls_back_to_decide_on_failure(brain):
-    """If native continuation fails, brain rolls back to decide() and skips the failed vendor."""
-    from litellm.exceptions import APIConnectionError
-
+async def test_decide_can_resume_after_failed_model_key(brain):
+    """Continuation fallback can skip a failed model key and resume strategy order."""
     tool_def = ToolDefinition(
         name="calculate",
         description="x",
         parameters={"type": "object", "properties": {}, "required": []},
     )
-    tool_calls = [ToolCall(id="tc-1", name="calculate", params={})]
-    tool_results = [ToolResult(tool_call_id="tc-1", name="calculate", content="42")]
+    messages = [
+        {"role": "system", "content": "soul"},
+        {"role": "user", "content": "calc"},
+        {"role": "assistant", "tool_calls": []},
+        {"role": "tool", "tool_call_id": "tc-1", "content": "42"},
+    ]
 
-    brain._last_provider_name = "gemini"
-    brain._last_model_key = "gemini-flash"
-
-    conn_error = APIConnectionError(
-        message="lost connection", llm_provider="gemini", model="gemini-3-flash-preview"
-    )
     final_response = _mk_response(content="done\n---\nContext: cs")
 
-    mock_acompletion = AsyncMock(side_effect=[conn_error, final_response])
+    mock_acompletion = AsyncMock(return_value=final_response)
     with patch(
         "errand.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
     ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
-        result = await brain.submit_tool_results(
-            tool_calls=tool_calls,
-            tool_results=tool_results,
+        result = await brain.decide(
+            messages=messages,
             tool_definitions=[tool_def],
-            fallback_context="ctx",
-            fallback_instruction="instr",
+            skip_model_keys=["gemini-flash"],
+            start_after_model_key="gemini-flash",
         )
 
     decision = result["decision"]
-    assert mock_acompletion.await_count == 2
-    second_kwargs = mock_acompletion.await_args_list[1].kwargs
-    assert second_kwargs["model"] == "openai/deepseek-ai/DeepSeek-V3"
+    assert mock_acompletion.await_count == 1
+    kwargs = mock_acompletion.await_args.kwargs
+    assert kwargs["model"] == "openai/deepseek-ai/DeepSeek-V3"
+    assert kwargs["messages"][2]["role"] == "assistant"
+    assert kwargs["messages"][3]["role"] == "tool"
     assert decision.text_response == "done"
 
 
-async def test_submit_tool_results_skips_failed_model_not_provider(brain):
+async def test_decide_start_after_failed_model_not_provider(brain):
     """A failed continuation should still try later models from the same provider."""
-    from litellm.exceptions import APIConnectionError
-
     brain.models_config = {
         "sf-v4-flash": {
             "provider": "siliconflow",
@@ -204,37 +197,28 @@ async def test_submit_tool_results_skips_failed_model_not_provider(brain):
         "gemini-flash": CONFIG_FIXTURE["gemini-flash"],
     }
     brain.model_strategy = ["gemini-flash", "sf-v4-flash", "sf-v4-pro"]
-    brain._last_provider_name = "siliconflow"
-    brain._last_model_key = "sf-v4-flash"
-
     tool_def = ToolDefinition(
         name="calculate",
         description="x",
         parameters={"type": "object", "properties": {}, "required": []},
     )
-    tool_calls = [ToolCall(id="tc-1", name="calculate", params={})]
-    tool_results = [ToolResult(tool_call_id="tc-1", name="calculate", content="42")]
-
-    conn_error = APIConnectionError(
-        message="lost connection",
-        llm_provider="siliconflow",
-        model="deepseek-ai/DeepSeek-V4-Flash",
-    )
     final_response = _mk_response(content="done\n---\nContext: cs")
 
-    mock_acompletion = AsyncMock(side_effect=[conn_error, final_response])
+    mock_acompletion = AsyncMock(return_value=final_response)
     with patch(
         "errand.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
     ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
-        result = await brain.submit_tool_results(
-            tool_calls=tool_calls,
-            tool_results=tool_results,
+        result = await brain.decide(
+            messages=[
+                {"role": "system", "content": "soul"},
+                {"role": "user", "content": "calc"},
+            ],
             tool_definitions=[tool_def],
-            fallback_context="ctx",
-            fallback_instruction="instr",
+            skip_model_keys=["sf-v4-flash"],
+            start_after_model_key="sf-v4-flash",
         )
 
-    second_kwargs = mock_acompletion.await_args_list[1].kwargs
+    second_kwargs = mock_acompletion.await_args.kwargs
     assert second_kwargs["model"] == "openai/deepseek-ai/DeepSeek-V4-Pro"
     assert result["decision"].text_response == "done"

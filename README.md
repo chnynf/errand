@@ -315,7 +315,7 @@ flowchart TD
 | Interfaces | `errand/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
 | Sessions | `errand/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
 | Agent Loop | `errand/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
-| Brain | `errand/brain/` | `Brain.decide(...)`, `Brain.submit_tool_results(...)` | Context, instruction, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
+| Brain | `errand/brain/` | `Brain.build_messages(...)`, `Brain.decide(...)` | Role-tagged messages, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
 | Tools | `errand/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
 | Scheduler | `errand/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
 | Config | `errand/config/` | `load_raw_config()`, `load_errand_config()` | `config.json`, env overrides | `ErrandConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |

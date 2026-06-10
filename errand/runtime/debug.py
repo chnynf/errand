@@ -70,15 +70,13 @@ def debug_log(
 
 def debug_log_prompt(
     title: str,
-    system_prompt: str,
-    user_prompt: str,
+    messages: list[dict],
     *,
     model: str | None = None,
     extra: str | None = None,
     tool_names: list[str] | None = None,
     session_id: str | None = None,
     agent_id: str | None = None,
-    instruction: str | None = None,
 ) -> None:
     """Log an outgoing AI request, deduplicating repeated system prompts."""
     global _last_system_prompt, _last_session_id
@@ -88,6 +86,10 @@ def debug_log_prompt(
     parts: list[str] = []
     if agent_id:
         parts.append(f"Agent: {agent_id}")
+
+    system_prompt = ""
+    if messages and messages[0].get("role") == "system":
+        system_prompt = str(messages[0].get("content", ""))
 
     if system_prompt == _last_system_prompt and session_id == _last_session_id:
         parts.append("System: [same as previous call]")
@@ -101,13 +103,15 @@ def debug_log_prompt(
             preview += "..."
         parts.append(f"  {preview}")
 
-    prompt_preview = user_prompt[:300].replace("\n", " ")
-    if len(user_prompt) > 300:
+    body = "\n".join(
+        f"{m.get('role', '?')}: {str(m.get('content') or m.get('tool_calls') or '')[:180]}"
+        for m in messages[1:]
+    )
+    prompt_preview = body[:300].replace("\n", " ")
+    if len(body) > 300:
         prompt_preview += "..."
-    parts.append(f"Prompt Context: {prompt_preview}")
-
-    if instruction:
-        parts.append(f"Instruction: {instruction}")
+    parts.append(f"Messages: {len(messages)}")
+    parts.append(f"Message Preview: {prompt_preview}")
 
     if tool_names:
         parts.append(f"Tools:  {', '.join(tool_names)}")

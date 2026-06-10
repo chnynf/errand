@@ -5,7 +5,7 @@ Given a session's persisted memory and a fresh user input, the loop:
 1. Logs the input in memory.
 2. Asks ``Brain.decide`` for the next step.
 3. If the brain asks for tool calls, runs them through ``ToolRegistry``
-   and sends results back to the brain via ``Brain.submit_tool_results``.
+   and appends the results to the running message list.
 4. Repeats until the brain returns final text or a safety cap fires.
 5. Persists memory and returns the final response.
 """
@@ -105,29 +105,23 @@ class AgentLoop:
         round_tools_used: list[str] = []
         round_models_used: list[str] = []
         last_tool_results: list[ToolResult] = []
-        working_trace_parts: list[str] = []
         scheduled_messages: list[str] = []
         next_log_extra: Optional[str] = None
-        next_brain_output = None
+        messages = self.brain.build_messages(
+            self.memory.build_history_messages(),
+            context_summary=self.memory.data.get("context_summary"),
+            session_note=self.memory.data.get("metadata", {}).get("session_note"),
+            instruction="Analyze the user's input. Decide whether to call a tool or respond directly.",
+        )
 
         while True:
-            working_trace = "\n\n".join(working_trace_parts) if working_trace_parts else None
-            context_text, instruction = self.memory.get_formatted_context(
-                working_trace=working_trace
+            await _progress(f"Thinking... [{self.agent_id}]")
+            brain_output = await self.brain.decide(
+                messages,
+                tool_definitions=[] if force_respond else tool_definitions,
+                session_id=self.memory.session_id,
+                log_extra=next_log_extra,
             )
-
-            if next_brain_output:
-                brain_output = next_brain_output
-                next_brain_output = None
-            else:
-                await _progress(f"Thinking... [{self.agent_id}]")
-                brain_output = await self.brain.decide(
-                    context_text,
-                    instruction,
-                    tool_definitions=tool_definitions,
-                    session_id=self.memory.session_id,
-                    log_extra=next_log_extra,
-                )
             next_log_extra = None
 
             decision: BrainDecision = brain_output["decision"]
@@ -212,11 +206,8 @@ class AgentLoop:
 
                 if last_tool_results:
                     self.memory.add_tool_results(tool_calls, last_tool_results)
-                    working_trace_parts.append(
-                        self._format_tool_trace(tool_calls, last_tool_results)
-                    )
-                else:
-                    working_trace_parts.append("No valid tool calls were executed.")
+                messages.append(self._assistant_tool_message(tool_calls))
+                messages.extend(self._tool_result_messages(last_tool_results))
 
                 max_rounds = self.agent_spec.max_tool_rounds
                 if action_count >= max_rounds:
@@ -228,28 +219,19 @@ class AgentLoop:
                         ),
                         extra=f"agent={self.agent_id}",
                     )
-                    working_trace_parts.append(
-                        "You have reached the maximum number of action attempts. "
-                        "Do NOT call any more tools. You MUST respond to the user now "
-                        "with a summary of what happened.",
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have reached the maximum number of action attempts. "
+                                "Do not call any more tools. Respond now with a summary "
+                                "of what happened."
+                            ),
+                        }
                     )
                     force_respond = True
                     hit_tool_cap = True
-                    next_brain_output = None
                     next_log_extra = "forced response after tool cap"
-                else:
-                    fallback_context, fallback_instruction = self.memory.get_formatted_context(
-                        working_trace="\n\n".join(working_trace_parts)
-                    )
-                    next_brain_output = await self.brain.submit_tool_results(
-                        tool_calls=tool_calls,
-                        tool_results=last_tool_results,
-                        tool_definitions=tool_definitions,
-                        fallback_context=fallback_context,
-                        fallback_instruction=fallback_instruction,
-                        prompt_context=context_text,
-                        prompt_instruction=instruction,
-                    )
 
                 continue
 
@@ -321,21 +303,32 @@ class AgentLoop:
         return "\n".join(parts)
 
     @staticmethod
-    def _format_tool_trace(
-        tool_calls: List[ToolCall],
-        tool_results: List[ToolResult],
-    ) -> str:
-        """Return full current-turn tool trace for model continuation/fallback."""
-        calls_by_id = {call.id: call for call in tool_calls}
-        parts = []
-        for result in tool_results:
-            call = calls_by_id.get(result.tool_call_id)
-            params = call.params if call else {}
-            params_str = ", ".join(f"{key}={value!r}" for key, value in params.items())
-            parts.append(
-                f"Tool result: {result.name}({params_str})\n{result.content}"
-            )
-        return "\n\n".join(parts)
+    def _assistant_tool_message(tool_calls: List[ToolCall]) -> dict:
+        return {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.params),
+                    },
+                }
+                for call in tool_calls
+            ],
+        }
+
+    @staticmethod
+    def _tool_result_messages(tool_results: List[ToolResult]) -> list[dict]:
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": result.tool_call_id,
+                "content": result.content,
+            }
+            for result in tool_results
+        ]
 
     async def shutdown(self) -> None:
         await self.memory.save_session()

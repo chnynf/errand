@@ -35,7 +35,6 @@ from errand.contracts.types import (
     BrainDecision,
     ToolCall,
     ToolDefinition,
-    ToolResult,
 )
 
 
@@ -104,7 +103,7 @@ def _extract_usage(response) -> dict:
     }
 
 
-def _system_message(system_prompt: str) -> dict:
+def _cache_system_message(message: dict) -> dict:
     """Wrap the system prompt with a cache_control breakpoint.
 
     LiteLLM translates the ``cache_control`` field to the correct
@@ -112,27 +111,18 @@ def _system_message(system_prompt: str) -> dict:
     ``cachedContents``).  Providers that don't support caching
     silently ignore the field.
     """
+    if message.get("role") != "system" or not isinstance(message.get("content"), str):
+        return message
     return {
-        "role": "system",
+        **message,
         "content": [
             {
                 "type": "text",
-                "text": system_prompt,
+                "text": message["content"],
                 "cache_control": {"type": "ephemeral"},
             }
         ],
     }
-
-
-def _strip_markdown_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
 
 
 def _parse_text_for_context_summary(text: str) -> BrainDecision:
@@ -172,24 +162,22 @@ class LiteLLMProvider(LLMProvider):
     def supports_native_tools(self) -> bool:
         return True
 
-    async def generate_with_tools(
+    async def generate(
         self,
         model: str,
-        system_prompt: str,
-        prompt: str,
+        messages: list[dict],
         tool_definitions: List[ToolDefinition],
         *,
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         extra_body: Optional[dict] = None,
     ) -> Tuple[BrainDecision, dict]:
-        messages = [
-            _system_message(system_prompt),
-            {"role": "user", "content": prompt},
-        ]
+        request_messages = list(messages)
+        if request_messages:
+            request_messages[0] = _cache_system_message(request_messages[0])
         response = await litellm.acompletion(
             **_build_call_kwargs(model, api_base, api_key, extra_body),
-            messages=messages,
+            messages=request_messages,
             tools=_tool_defs_to_openai(tool_definitions),
         )
         msg = response.choices[0].message
@@ -200,89 +188,6 @@ class LiteLLMProvider(LLMProvider):
 
         text = (msg.content or "").strip()
         return _parse_text_for_context_summary(text), usage
-
-    async def continue_with_tool_results(
-        self,
-        model: str,
-        system_prompt: str,
-        prompt: str,
-        tool_calls: List[ToolCall],
-        tool_results: List[ToolResult],
-        tool_definitions: List[ToolDefinition],
-        *,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        extra_body: Optional[dict] = None,
-    ) -> Tuple[BrainDecision, dict]:
-        assistant_tool_calls = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.name, "arguments": json.dumps(tc.params)},
-            }
-            for tc in tool_calls
-        ]
-
-        messages = [
-            _system_message(system_prompt),
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "tool_calls": assistant_tool_calls},
-        ]
-        for tr in tool_results:
-            messages.append(
-                {"role": "tool", "tool_call_id": tr.tool_call_id, "content": tr.content}
-            )
-
-        response = await litellm.acompletion(
-            **_build_call_kwargs(model, api_base, api_key, extra_body),
-            messages=messages,
-            tools=_tool_defs_to_openai(tool_definitions),
-        )
-        msg = response.choices[0].message
-        usage = _extract_usage(response)
-
-        if getattr(msg, "tool_calls", None):
-            return BrainDecision(tool_calls=_parse_tool_calls(msg)), usage
-
-        text = (msg.content or "").strip()
-        return _parse_text_for_context_summary(text), usage
-
-    async def generate_decision(
-        self,
-        model: str,
-        system_prompt: str,
-        prompt: str,
-        response_schema: dict,
-        *,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        extra_body: Optional[dict] = None,
-    ) -> Tuple[dict, dict]:
-        """JSON-mode fallback for models without native tool calling.
-
-        Embeds the schema in the system prompt to keep behaviour identical
-        across providers. LiteLLM's ``response_format={"type": "json_object"}``
-        works for OpenAI-compatible providers; Gemini also honours it.
-        """
-        schema_instruction = (
-            "\n\nOUTPUT FORMAT: You MUST respond with ONLY a raw JSON object "
-            "(no markdown, no commentary). The JSON object MUST conform to "
-            "this schema:\n"
-            f"{json.dumps(response_schema, indent=2)}\n\n"
-            "No extra keys are allowed."
-        )
-        messages = [
-            _system_message(system_prompt + schema_instruction),
-            {"role": "user", "content": prompt},
-        ]
-        response = await litellm.acompletion(
-            **_build_call_kwargs(model, api_base, api_key, extra_body),
-            messages=messages,
-            response_format={"type": "json_object"},
-        )
-        text = _strip_markdown_fences(response.choices[0].message.content or "")
-        return json.loads(text), _extract_usage(response)
-
     def is_retryable(self, exc: Exception) -> bool:
         return isinstance(
             exc,

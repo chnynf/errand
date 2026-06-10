@@ -5,9 +5,7 @@ from typing import Dict, List, Optional, Tuple, Type
 
 from errand.contracts.types import (
     BrainDecision,
-    ToolCall,
     ToolDefinition,
-    ToolResult,
 )
 
 
@@ -24,11 +22,10 @@ class LLMProvider(abc.ABC):
         return False
 
     @abc.abstractmethod
-    async def generate_with_tools(
+    async def generate(
         self,
         model: str,
-        system_prompt: str,
-        prompt: str,
+        messages: list[dict],
         tool_definitions: List[ToolDefinition],
         *,
         api_base: Optional[str] = None,
@@ -36,36 +33,6 @@ class LLMProvider(abc.ABC):
         extra_body: Optional[dict] = None,
     ) -> Tuple[BrainDecision, dict]:
         """Make an API call with native tool definitions."""
-
-    @abc.abstractmethod
-    async def continue_with_tool_results(
-        self,
-        model: str,
-        system_prompt: str,
-        prompt: str,
-        tool_calls: List[ToolCall],
-        tool_results: List[ToolResult],
-        tool_definitions: List[ToolDefinition],
-        *,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        extra_body: Optional[dict] = None,
-    ) -> Tuple[BrainDecision, dict]:
-        """Send tool results back to continue the conversation."""
-
-    @abc.abstractmethod
-    async def generate_decision(
-        self,
-        model: str,
-        system_prompt: str,
-        prompt: str,
-        response_schema: dict,
-        *,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        extra_body: Optional[dict] = None,
-    ) -> Tuple[dict, dict]:
-        """JSON-mode fallback for models without native tool calling."""
 
     @abc.abstractmethod
     def is_retryable(self, exc: Exception) -> bool:
