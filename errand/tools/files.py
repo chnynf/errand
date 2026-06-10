@@ -242,9 +242,9 @@ async def append_file(
 ) -> str:
     """Append text to a file; creates it if it does not exist. Never overwrites.
 
-    Use for adding new notes, memories, or log entries to existing files without
-    touching their current content. To make targeted changes to existing content
-    use ``edit_file``; to replace a file wholesale use ``write_file``.
+    Use for user requests to save, record, capture, add, or remember information
+    in a file. For targeted changes to existing content use ``edit_file``; to
+    replace a file wholesale use ``write_file``.
 
     Args:
         path: File path inside the scope.

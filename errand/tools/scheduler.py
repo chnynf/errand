@@ -81,7 +81,8 @@ def schedule_message(
 ) -> str:
     """Schedule a future or recurring task/message.
 
-    Creates the job only; do NOT run the task now. The job fires later on its own.
+    Create a future or recurring job. Use for user requests to schedule
+    reminders, messages, or actions. The job fires later on its own.
 
     Args:
         message: What should happen when the job fires (NOT the user's scheduling

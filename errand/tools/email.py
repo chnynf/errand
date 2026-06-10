@@ -49,7 +49,7 @@ def _get_smtp_config() -> dict:
 def send_email(to: str, subject: str, body: str) -> str:
     """Send an email via SMTP.
 
-    Use only when the user explicitly asks to send an email (not draft).
+    Use when the user explicitly asks to send an email (not draft).
     Resolve ambiguous recipients with list_contacts first.
 
     Args:
