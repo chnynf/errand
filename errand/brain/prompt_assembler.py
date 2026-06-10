@@ -15,6 +15,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from errand.config import FileAccessConfig
 
@@ -23,25 +24,20 @@ SHARED_SOUL_INCLUDE = "{{ include:SHARED_SOUL }}"
 SHARED_NOTES_INDEX_INCLUDE = "{{ include:SHARED_NOTES_INDEX }}"
 AGENT_PROFILE_INCLUDE = "{{ include:AGENT_PROFILE }}"
 
+# Default user zone. Errand is UTC-internal; this is only the human-facing
+# reference shown to the model alongside UTC, and the default zone the
+# scheduler assumes when the user does not name one.
+DEFAULT_TZ = ZoneInfo("America/New_York")
+
 
 def _current_context() -> str:
-    """Return a short header with current time, day, and location."""
-    tz_str = os.getenv("TIMEZONE", "UTC")
-    try:
-        import zoneinfo
-
-        tz = zoneinfo.ZoneInfo(tz_str)
-        now = datetime.now(tz)
-    except Exception:
-        now = datetime.now(timezone.utc)
-        tz_str = "UTC"
-    location = os.getenv("LOCATION", tz_str)
-    utc_now = now.astimezone(timezone.utc)
-    iso_utc = utc_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Return a short header with the current time in US East and UTC."""
+    utc = datetime.now(timezone.utc)
+    east = utc.astimezone(DEFAULT_TZ)
     return (
         "CURRENT CONTEXT:\n"
-        f"- Date and time: {now.strftime('%Y-%m-%d, %A, %H:%M %Z')} (UTC: {iso_utc})\n"
-        f"- Location: {location}"
+        f"- US East: {east.strftime('%Y-%m-%d, %A, %H:%M %Z')}\n"
+        f"- UTC: {utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
     )
 
 

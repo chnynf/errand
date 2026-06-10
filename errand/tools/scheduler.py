@@ -1,9 +1,12 @@
 """Scheduling tools. The AI supplies pre-parsed schedule values."""
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from errand.scheduler.store import JobStore
 from errand.scheduler.schedule import (
+    format_iso,
     next_run_at,
     parse_every,
     validate_at,
@@ -12,15 +15,34 @@ from errand.scheduler.schedule import (
 
 _store = JobStore()
 
+# Zone assumed when the user names a clock time but no timezone is given.
+DEFAULT_TZ_NAME = "America/New_York"
 
-def _build_schedule(kind: str, value: str, end_at: str) -> tuple[dict | None, str]:
+
+def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[dict | None, str]:
     """Validate inputs and return (schedule, error); schedule is None on error."""
     if kind == "at":
         if end_at:
             return None, "end_at is only supported for recurring schedules ('every' or 'cron')."
-        if not validate_at(value):
-            return None, f"Invalid ISO 8601 timestamp for 'at': {value!r}. Use e.g. 2025-02-24T09:00:00Z."
-        return {"kind": "at", "at": value.strip()}, ""
+        value = value.strip()
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None, (
+                f"Invalid time for 'at': {value!r}. Provide a local date+time like "
+                f"2026-06-10T11:00 (with an optional timezone), or an absolute UTC "
+                f"time like 2026-06-10T15:00:00Z."
+            )
+        # A naive wall-clock time is interpreted in `tz` (default US East) so the
+        # model never does timezone math; a value that already carries Z/offset
+        # is absolute and converts straight to UTC.
+        if dt.tzinfo is None:
+            tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
+            try:
+                dt = dt.replace(tzinfo=ZoneInfo(tz_name))
+            except (ZoneInfoNotFoundError, ValueError, OSError):
+                return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+        return {"kind": "at", "at": format_iso(dt)}, ""
     if kind == "every":
         interval = parse_every(value)
         if not interval:
@@ -54,6 +76,7 @@ def schedule_message(
     name: str = "",
     intent: str = "execute",
     end_at: str = "",
+    timezone: str = "",
     _context: dict[str, Any] | None = None,
 ) -> str:
     """Schedule a future or recurring task/message.
@@ -68,10 +91,20 @@ def schedule_message(
               Never store the trigger phrasing like "remind me in 10 minutes" as the task.
             - intent="say": the exact text to deliver to the user, verbatim.
         schedule_kind: "at" (one-shot), "every" (recurring), or "cron".
-        schedule_value: "at"=ISO 8601 UTC; "every"=seconds or "1h"/"30m"/"1d"; "cron"=5-field expr.
+        schedule_value: For "at", EITHER a local wall-clock time with NO offset
+            (e.g. "2026-06-10T11:00") which is interpreted in `timezone`, OR an
+            absolute UTC time ending in Z (e.g. "2026-06-10T15:00:00Z").
+            For a relative request ("in 3 hours"), compute now (UTC is shown in
+            context) + the offset and pass that as an absolute "...Z" value.
+            "every"=seconds or "1h"/"30m"/"1d"; "cron"=5-field expr.
         name: Optional job name.
         intent: "execute" (run as instruction) or "say" (deliver text verbatim).
         end_at: ISO 8601 UTC end time for recurring schedules.
+        timezone: IANA zone for a local "at" wall-clock time, e.g.
+            "America/New_York" (美东) or "America/Los_Angeles" (美西). Set this
+            when the user names a clock time in a specific zone; the scheduler
+            converts it to UTC. Defaults to America/New_York if omitted. Do NOT
+            convert timezones yourself. Ignored for absolute "...Z" values.
 
     Returns: Confirmation with job ID and next run time.
     """
@@ -88,7 +121,7 @@ def schedule_message(
     if end_at and not validate_at(end_at):
         return f"Invalid ISO 8601 timestamp for 'end_at': {end_at!r}. Use e.g. 2025-02-24T09:00:00Z."
 
-    schedule, error = _build_schedule(kind, str(schedule_value), end_at)
+    schedule, error = _build_schedule(kind, str(schedule_value), end_at, str(timezone or ""))
     if error:
         return error
     if end_at:
