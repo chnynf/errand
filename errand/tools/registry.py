@@ -49,11 +49,17 @@ def _annotation_name(annotation: Any, default: str) -> str:
 class ToolRegistry:
     """Registry of executable tools loaded from ``errand/tools/``."""
 
-    def __init__(self, tools_dir: Path | None = None):
+    def __init__(
+        self,
+        tools_dir: Path | None = None,
+        can_delegate: list[str] | None = None,
+    ):
         self._tools_dir = tools_dir or TOOLS_DIR
         self._tools: dict[str, Callable] = {}
         self._descriptions: list[dict[str, str]] = []
         self._load()
+        if can_delegate is not None:
+            self._patch_delegation_description(can_delegate)
 
     def _load(self) -> None:
         self._tools.clear()
@@ -84,6 +90,17 @@ class ToolRegistry:
                         "doc": (inspect.getdoc(obj) or "No description provided.").strip(),
                     }
                 )
+
+    def _patch_delegation_description(self, can_delegate: list[str]) -> None:
+        """Append the caller's allowed delegate IDs to the invoke_agent description."""
+        for desc in self._descriptions:
+            if desc["name"] == "invoke_agent":
+                if can_delegate:
+                    ids = ", ".join(f'"{a}"' for a in can_delegate)
+                    desc["doc"] += f"\n\nAllowed agent_id values: {ids}."
+                else:
+                    desc["doc"] += "\n\nNo sub-agents are configured for delegation."
+                break
 
     def get_tool_definitions(self) -> list[ToolDefinition]:
         """Build native ToolDefinition list for LiteLLM."""

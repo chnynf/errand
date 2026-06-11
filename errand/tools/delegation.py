@@ -18,13 +18,11 @@ async def invoke_agent(
     context: str = "",
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Delegate a bounded task to another configured Errand agent.
+    """Delegate a bounded task to a specialist sub-agent.
 
-    Use when a task benefits from an isolated specialist context, such as
-    applied-science reasoning, experiment design, metrics analysis, or another
-    configured specialist. Pass a clear task and only the context needed for
-    that task. The delegated agent runs in its own session and returns a final
-    summary for you to synthesize.
+    Pass a clear, self-contained task and only the context the sub-agent needs.
+    It runs in its own session and returns a summary for you to synthesize.
+    Valid agent_id values are injected into this description at startup.
     """
     runtime_context = _context or {}
     caller_agent_id = str(runtime_context.get("agent_id") or "")
