@@ -285,7 +285,7 @@ def load_raw_config(path: Path = CONFIG_PATH) -> dict:
         ERRAND_AGENT_PROFILE: agent profile / KB entrypoint path.
         ERRAND_KNOWLEDGE_ROOTS: os.pathsep-separated roots for the ``kb`` scope.
     """
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     # Legacy ``knowledge.allowed_roots`` is mapped into the ``kb`` scope so

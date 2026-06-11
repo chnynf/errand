@@ -92,7 +92,7 @@ class Memory:
     def _load_session(self) -> Dict[str, Any]:
         if os.path.exists(self.session_file):
             try:
-                with open(self.session_file, "r") as f:
+                with open(self.session_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except json.JSONDecodeError:
                 return self._create_new_session()
@@ -118,8 +118,8 @@ class Memory:
     async def save_session(self) -> None:
         if len(self.data["history"]) > _MAX_HISTORY_ENTRIES:
             self.data["history"] = self.data["history"][-_MAX_HISTORY_ENTRIES:]
-        async with aiofiles.open(self.session_file, "w") as f:
-            await f.write(json.dumps(self.data, indent=2))
+        async with aiofiles.open(self.session_file, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(self.data, indent=2, ensure_ascii=False))
 
     def add_history(self, role: str, content: Any, metadata: Optional[Dict] = None) -> None:
         entry = {
