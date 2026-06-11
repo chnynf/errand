@@ -184,7 +184,8 @@ class LiteLLMProvider(LLMProvider):
         usage = _extract_usage(response)
 
         if getattr(msg, "tool_calls", None):
-            return BrainDecision(tool_calls=_parse_tool_calls(msg)), usage
+            reasoning = getattr(msg, "reasoning_content", None) or None
+            return BrainDecision(tool_calls=_parse_tool_calls(msg), reasoning_content=reasoning), usage
 
         text = (msg.content or "").strip()
         return _parse_text_for_context_summary(text), usage

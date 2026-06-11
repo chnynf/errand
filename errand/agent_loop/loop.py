@@ -206,7 +206,7 @@ class AgentLoop:
 
                 if last_tool_results:
                     self.memory.add_tool_results(tool_calls, last_tool_results)
-                messages.append(self._assistant_tool_message(tool_calls))
+                messages.append(self._assistant_tool_message(tool_calls, decision.reasoning_content))
                 messages.extend(self._tool_result_messages(last_tool_results))
 
                 max_rounds = self.agent_spec.max_tool_rounds
@@ -303,8 +303,8 @@ class AgentLoop:
         return "\n".join(parts)
 
     @staticmethod
-    def _assistant_tool_message(tool_calls: List[ToolCall]) -> dict:
-        return {
+    def _assistant_tool_message(tool_calls: List[ToolCall], reasoning_content: Optional[str] = None) -> dict:
+        msg: dict = {
             "role": "assistant",
             "tool_calls": [
                 {
@@ -318,6 +318,9 @@ class AgentLoop:
                 for call in tool_calls
             ],
         }
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
+        return msg
 
     @staticmethod
     def _tool_result_messages(tool_results: List[ToolResult]) -> list[dict]:

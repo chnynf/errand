@@ -45,3 +45,4 @@ class BrainDecision:
     tool_calls: List[ToolCall] = field(default_factory=list)
     text_response: Optional[str] = None
     context_summary: Optional[str] = None
+    reasoning_content: Optional[str] = None
