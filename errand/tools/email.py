@@ -55,7 +55,9 @@ def send_email(to: str, subject: str, body: str) -> str:
     Args:
         to: Recipient name (from contacts.md) or email address.
         subject: Subject line.
-        body: Body text.
+        body: Body text. Always open with a brief identification line, e.g.
+            "Hi, I'm Yunfei's AI assistant." — unless the user explicitly asks
+            you not to identify yourself.
 
     Returns: Success or error message.
     """
@@ -88,7 +90,7 @@ def send_email(to: str, subject: str, body: str) -> str:
             server.starttls()
             server.login(cfg["address"], cfg["password"])
             server.send_message(msg)
-        return f"Email sent successfully to {recipient_email}."
+        return f"Email sent to {recipient_email}. Subject: {subject!r}. Body: {len(body)} chars."
     except Exception as e:
         return f"Failed to send email: {e}"
 

@@ -48,6 +48,7 @@ class FileScope:
     append: bool | str = False
     edit:   bool | str = False
     delete: bool | str = "ask"
+    agent_overrides: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,12 @@ def _parse_file_scope(raw: dict) -> FileScope:
         val = raw.get(key)
         return _parse_perm(val) if val is not None else default
 
+    _ops = ("read", "list", "write", "append", "edit", "delete")
+    agent_overrides = {
+        agent_id: {op: _parse_perm(val) for op, val in ops.items() if op in _ops}
+        for agent_id, ops in (raw.get("agent_overrides") or {}).items()
+        if isinstance(ops, dict)
+    }
     return FileScope(
         roots=list(raw.get("roots") or []),
         read=p("read",   True),
@@ -88,6 +95,7 @@ def _parse_file_scope(raw: dict) -> FileScope:
         append=p("append", False),
         edit=p("edit",   False),
         delete=p("delete", "ask"),
+        agent_overrides=agent_overrides,
     )
 
 

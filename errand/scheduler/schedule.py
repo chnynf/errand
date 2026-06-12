@@ -30,13 +30,16 @@ def now_iso() -> str:
     return format_iso(datetime.now(timezone.utc))
 
 
-def _next_cron(expr: object, after: datetime) -> Optional[datetime]:
+def _next_cron(expr: object, after: datetime, tz_name: str = "UTC") -> Optional[datetime]:
     if not isinstance(expr, str) or not expr.strip():
         return None
     try:
         from croniter import croniter
+        from zoneinfo import ZoneInfo
 
-        return croniter(expr, after).get_next(datetime)
+        after_local = after.astimezone(ZoneInfo(tz_name))
+        nxt_ts = croniter(expr, after_local).get_next(float)
+        return datetime.fromtimestamp(nxt_ts, tz=timezone.utc)
     except Exception:
         return None
 
@@ -82,7 +85,7 @@ def next_run_at(schedule: dict, from_ts: Optional[float] = None) -> Optional[str
         seconds = schedule.get("interval_seconds") or 0
         nxt = now + timedelta(seconds=seconds) if seconds > 0 else None
     elif kind == "cron":
-        nxt = _next_cron(schedule.get("expr"), now)
+        nxt = _next_cron(schedule.get("expr"), now, schedule.get("tz", "UTC"))
     else:
         nxt = None
 

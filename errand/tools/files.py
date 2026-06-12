@@ -94,6 +94,19 @@ def _located(path: str, roots: list[Path], scope_name: str, *, base_path: str | 
     return target
 
 
+def _resolve_perm(
+    base: bool | str,
+    agent_overrides: dict,
+    agent_id: str | None,
+    op_key: str,
+) -> bool | str:
+    if agent_id and agent_overrides:
+        override = agent_overrides.get(agent_id, {}).get(op_key)
+        if override is not None:
+            return override
+    return base
+
+
 async def _authorize_op(
     perm: bool | str,
     scope_name: str,
@@ -219,7 +232,8 @@ async def write_file(
         action = "overwrite" if target.exists() else "create"
         preview = content[:200].replace("\n", "↵")
         blocked = await _authorize_op(
-            file_scope.write, name, _context,
+            _resolve_perm(file_scope.write, file_scope.agent_overrides, (_context or {}).get("agent_id"), "write"),
+            name, _context,
             operation=f"{action} file",
             detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
         )
@@ -264,7 +278,8 @@ async def append_file(
         action = "append to" if target.exists() else "create and append to"
         preview = content[:200].replace("\n", "↵")
         blocked = await _authorize_op(
-            file_scope.append, name, _context,
+            _resolve_perm(file_scope.append, file_scope.agent_overrides, (_context or {}).get("agent_id"), "append"),
+            name, _context,
             operation="append to file",
             detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
         )
@@ -327,7 +342,8 @@ async def edit_file(
         old_snippet = old_string[:200].replace("\n", "↵")
         new_snippet = new_string[:200].replace("\n", "↵")
         blocked = await _authorize_op(
-            file_scope.edit, name, _context,
+            _resolve_perm(file_scope.edit, file_scope.agent_overrides, (_context or {}).get("agent_id"), "edit"),
+            name, _context,
             operation="edit file",
             detail=(
                 f"Scope: {name}\nPath: {target}\nReplacements: {replacements}\n"
@@ -338,7 +354,7 @@ async def edit_file(
             return blocked
         target.write_text(updated, encoding="utf-8")
         suffix = "s" if replacements != 1 else ""
-        return f"Replaced {replacements} occurrence{suffix} in {target}."
+        return f"Replaced {replacements} occurrence{suffix} in {target}: {old_snippet[:60]!r} → {new_snippet[:60]!r}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -370,7 +386,8 @@ async def delete_file(
             raise OSError(f"Directory not empty: {target}")
         kind = "directory" if is_dir else "file"
         blocked = await _authorize_op(
-            file_scope.delete, name, _context,
+            _resolve_perm(file_scope.delete, file_scope.agent_overrides, (_context or {}).get("agent_id"), "delete"),
+            name, _context,
             operation=f"delete {kind}",
             detail=f"Scope: {name}\nPath: {target}",
         )

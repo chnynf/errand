@@ -52,7 +52,13 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
         expr = value.strip()
         if not validate_cron(expr):
             return None, f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
-        return {"kind": "cron", "expr": expr}, ""
+        tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz_name)
+        except Exception:
+            return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+        return {"kind": "cron", "expr": expr, "tz": tz_name}, ""
     return None, f"schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
 
 
@@ -101,11 +107,12 @@ def schedule_message(
         name: Optional job name.
         intent: "execute" (run as instruction) or "say" (deliver text verbatim).
         end_at: ISO 8601 UTC end time for recurring schedules.
-        timezone: IANA zone for a local "at" wall-clock time, e.g.
-            "America/New_York" (美东) or "America/Los_Angeles" (美西). Set this
-            when the user names a clock time in a specific zone; the scheduler
-            converts it to UTC. Defaults to America/New_York if omitted. Do NOT
-            convert timezones yourself. Ignored for absolute "...Z" values.
+        timezone: IANA zone name, e.g. "America/New_York" (美东) or
+            "America/Los_Angeles" (美西). Defaults to America/New_York if omitted.
+            For "at": a naive wall-clock value is interpreted in this zone; an
+            absolute "...Z" value ignores it. For "cron": the expression fields
+            are evaluated in this zone (e.g. "30 9 * * 5" fires at 09:30 local
+            time, not 09:30 UTC). Do NOT convert timezones yourself.
 
     Returns: Confirmation with job ID and next run time.
     """

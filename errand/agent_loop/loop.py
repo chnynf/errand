@@ -34,7 +34,7 @@ MAX_RESPONSE_RETRIES = 3
 
 # Tools a job is forbidden from calling while it is itself executing, so a
 # scheduled run can never (re)schedule and spin into an infinite loop.
-_SCHEDULED_RUN_BLOCKED_TOOLS = {"schedule_message"}
+_SCHEDULED_RUN_BLOCKED_TOOLS = {"schedule_message", "delete_scheduled_job"}
 
 
 class AgentLoop:
@@ -89,7 +89,7 @@ class AgentLoop:
         final_response = ""
 
         tool_definitions = self.tool_registry.get_tool_definitions()
-        if is_scheduled:
+        if is_scheduled or is_subagent:
             tool_definitions = [
                 t for t in tool_definitions if t.name not in _SCHEDULED_RUN_BLOCKED_TOOLS
             ]
