@@ -42,7 +42,9 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
                 dt = dt.replace(tzinfo=ZoneInfo(tz_name))
             except (ZoneInfoNotFoundError, ValueError, OSError):
                 return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
-        return {"kind": "at", "at": format_iso(dt)}, ""
+        else:
+            tz_name = "UTC"
+        return {"kind": "at", "at": format_iso(dt), "tz": tz_name}, ""
     if kind == "every":
         interval = parse_every(value)
         if not interval:
@@ -54,25 +56,31 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
             return None, f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
         tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
         try:
-            from zoneinfo import ZoneInfo
             ZoneInfo(tz_name)
-        except Exception:
+        except (ZoneInfoNotFoundError, ValueError, OSError):
             return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
         return {"kind": "cron", "expr": expr, "tz": tz_name}, ""
     return None, f"schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
 
 
 def _describe(schedule: dict) -> str:
-    """Render a human-readable summary of a schedule."""
+    """Render a human-readable summary of a schedule, with timezone."""
     kind = schedule["kind"]
+    tz = schedule.get("tz", "UTC")
     if kind == "at":
-        text = f"at {schedule['at']}"
+        text = f"at {schedule['at']} ({tz})"
     elif kind == "every":
         text = f"every {schedule['interval_seconds']}s"
     else:  # cron
-        text = f"cron '{schedule['expr']}'"
+        text = f"cron '{schedule['expr']}' ({tz})"
     end_at = schedule.get("end_at")
     return f"{text} until {end_at}" if end_at else text
+
+
+def _preview(text: str, limit: int = 120) -> str:
+    """One-line, length-capped preview of a stored message."""
+    s = (text or "").strip().replace("\n", " ")
+    return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
 def schedule_message(
@@ -149,7 +157,8 @@ def schedule_message(
     )
     return (
         f"Scheduled: {job['name']} (id: {job['id']}). "
-        f"Schedule: {_describe(schedule)}. Next run: {next_run}. Intent: {intent}."
+        f"Schedule: {_describe(schedule)}. Next run: {next_run}. "
+        f"Intent: {intent}. Message: {_preview(message)!r}."
     )
 
 
@@ -162,11 +171,12 @@ def list_scheduled_jobs() -> str:
     jobs = _store.list_enabled()
     if not jobs:
         return "No scheduled jobs."
-    lines = ["Scheduled jobs:"]
+    lines = [f"Scheduled jobs ({len(jobs)}):"]
     for j in jobs:
         lines.append(f"  - {j['name']} (id: {j['id']})")
         lines.append(f"    Schedule: {_describe(j['schedule'])}")
         lines.append(f"    Next run: {j['next_run_at']}")
+        lines.append(f"    Intent: {j.get('intent', 'execute')}. Message: {_preview(j.get('message', ''), 80)!r}")
     return "\n".join(lines)
 
 
@@ -179,6 +189,11 @@ def cancel_scheduled_job(job_id: str) -> str:
     job_id = (job_id or "").strip()
     if not job_id:
         return "job_id is required."
-    if _store.disable(job_id):
-        return f"Job {job_id} has been cancelled."
-    return f"Job {job_id} not found."
+    cancelled = _store.update(job_id, enabled=False)
+    if cancelled is None:
+        return f"Job {job_id} not found."
+    return (
+        f"Cancelled: {cancelled['name']} (id: {cancelled['id']}). "
+        f"Was: {_describe(cancelled['schedule'])}. "
+        f"Message: {_preview(cancelled.get('message', ''))!r}."
+    )
