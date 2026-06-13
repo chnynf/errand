@@ -71,13 +71,14 @@ class AgentLoop:
         self, user_input: str, metadata: Optional[dict] = None
     ) -> str:
         """Process a single user interaction and return the final response."""
-        is_subagent = bool(metadata and metadata.get("is_subagent"))
-        is_scheduled = bool(metadata and metadata.get("is_scheduled_task"))
+        m = metadata or {}
+        is_subagent = bool(m.get("is_subagent"))
+        is_scheduled = bool(m.get("is_scheduled_task"))
         input_title = "Parent Agent -> Loop" if is_subagent else "User -> Loop"
         debug_log(input_title, user_input, extra=f"agent={self.agent_id}", truncate=False)
         self.memory.add_history("scheduled" if is_scheduled else "user", user_input)
 
-        reply_to = (metadata or {}).get("_reply_to")
+        reply_to = m.get("_reply_to")
 
         async def _progress(message: str) -> None:
             if reply_to and not is_subagent:
@@ -96,7 +97,7 @@ class AgentLoop:
         action_count = 0
         force_respond = False
         hit_tool_cap = False
-        suppress_usage_footer = bool(metadata and metadata.get("suppress_usage_footer"))
+        suppress_usage_footer = bool(m.get("suppress_usage_footer"))
 
         round_input_tokens = 0
         round_output_tokens = 0
@@ -185,8 +186,8 @@ class AgentLoop:
                                 "session_id": self.memory.session_id,
                                 "delegation_depth": self.delegation_depth,
                                 "debug": self.debug,
-                                "reply_to": (metadata or {}).get("_reply_to"),
-                                "source": (metadata or {}).get("_source"),
+                                "reply_to": m.get("_reply_to"),
+                                "source": m.get("_source"),
                             },
                         )
                         return ToolResult(tool_call_id=tc.id, name=tc.name, content=str(result))
@@ -252,11 +253,8 @@ class AgentLoop:
                 f"response may be incomplete]\n\n{final_response}"
             )
 
-        unique_tools = list(dict.fromkeys(round_tools_used))
-        tools_str = ", ".join(unique_tools) if unique_tools else "None"
-
-        unique_models = list(dict.fromkeys(round_models_used))
-        models_str = ", ".join(unique_models) if unique_models else "None"
+        tools_str = ", ".join(dict.fromkeys(round_tools_used)) or "None"
+        models_str = ", ".join(dict.fromkeys(round_models_used)) or "None"
 
         # cache_read is a subset of input_tokens (a "cache hit"); cache_write
         # is Anthropic-only and stays 0 for DeepSeek/Gemini, so hide it then.
@@ -271,8 +269,8 @@ class AgentLoop:
             f"*Tokens: {round_input_tokens} in{cache_str}, {round_output_tokens} out*\n"
             f"*Tools used: {tools_str}*"
         )
-        if metadata and metadata.get("is_scheduled_task"):
-            job_name = metadata.get("job_name", "Scheduled task")
+        if is_scheduled:
+            job_name = m.get("job_name", "Scheduled task")
             final_response = f"[{job_name}]\n\n" + final_response
         elif scheduled_messages:
             details = "\n".join(f"- {msg}" for msg in scheduled_messages)

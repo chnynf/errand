@@ -61,11 +61,15 @@ class Brain:
                 },
             },
         }
+        def from_spec(attr: str):
+            val = getattr(agent_spec, attr, None) if agent_spec else None
+            return raw_config.get(attr) if val is None else val
+
         self.models_config = raw_config.get("models", {})
         self.agent_id = agent_spec.id if agent_spec else "default"
+        spec_strategy = getattr(agent_spec, "model_strategy", None) if agent_spec else None
         self.model_strategy: List[str] = (
-            list(agent_spec.model_strategy) if agent_spec and agent_spec.model_strategy
-            else raw_config.get("model_strategy", [])
+            list(spec_strategy) if spec_strategy else raw_config.get("model_strategy", [])
         )
         self.base_delay: int = raw_config.get("retry", {}).get("base_delay_seconds", 2)
 
@@ -75,20 +79,11 @@ class Brain:
             )
 
         self.prompt_assembler = PromptAssembler(
-            shared_soul=(
-                agent_spec.shared_soul
-                if agent_spec and agent_spec.shared_soul is not None
-                else raw_config.get("shared_soul")
-            ),
-            agent_profile=(
-                agent_spec.agent_profile
-                if agent_spec and agent_spec.agent_profile is not None
-                else raw_config.get("agent_profile")
-            ),
+            shared_soul=from_spec("shared_soul"),
+            agent_profile=from_spec("agent_profile"),
             shared_notes_index=raw_config.get("shared_notes_index"),
             file_access=(
-                config.file_access
-                if config is not None
+                config.file_access if config is not None
                 else FileAccessConfig.from_dict(raw_config.get("file_access", {}))
             ),
         )

@@ -274,6 +274,7 @@ class Memory:
     ) -> dict[str, Any]:
         params = call.params if call else {}
         content = result.content
+        is_error = content.startswith("Error:")
         record: dict[str, Any] = {
             "tool_call_id": result.tool_call_id,
             "name": result.name,
@@ -281,53 +282,29 @@ class Memory:
             "content_chars": len(content),
         }
 
+        def ref(kind: str, default_path: Any = None) -> dict:
+            return {"type": kind, "scope": params.get("scope", "kb"), "path": params.get("path", default_path)}
+
         if result.name == "read_file":
-            record["result_ref"] = {
-                "type": "file",
-                "scope": params.get("scope", "kb"),
-                "path": params.get("path"),
-            }
-            if content.startswith("Error:"):
-                record["error"] = content[:preview_limit]
-            return record
-
-        if result.name == "list_dir":
-            record["result_ref"] = {
-                "type": "directory",
-                "scope": params.get("scope", "kb"),
-                "path": params.get("path", ""),
-            }
-            record["entry_count"] = 0 if content.startswith("Error:") else len(
-                [line for line in content.splitlines() if line.strip()]
-            )
-            if content.startswith("Error:"):
-                record["error"] = content[:preview_limit]
-            return record
-
-        if result.name in ("write_file", "edit_file", "delete_file"):
+            record["result_ref"] = ref("file")
+        elif result.name == "list_dir":
+            record["result_ref"] = ref("directory", default_path="")
+            record["entry_count"] = 0 if is_error else sum(1 for line in content.splitlines() if line.strip())
+        elif result.name in ("write_file", "edit_file", "delete_file"):
             # Keep history small: do not persist large write payloads verbatim.
-            record["params"] = {
-                key: value
-                for key, value in params.items()
-                if key not in ("content", "old_string", "new_string")
-            }
-            record["result_ref"] = {
-                "type": "file",
-                "scope": params.get("scope", "kb"),
-                "path": params.get("path"),
-            }
+            record["params"] = {k: v for k, v in params.items() if k not in ("content", "old_string", "new_string")}
+            record["result_ref"] = ref("file")
             record["preview"] = content[:preview_limit]
-            return record
-
-        if result.name in ("grep_files", "find_files"):
+        elif result.name in ("grep_files", "find_files"):
             record["preview"] = content[:preview_limit]
-            return record
+        else:
+            record["preview"] = (
+                content if len(content) <= preview_limit
+                else content[:preview_limit].rstrip() + "... [truncated]"
+            )
 
-        record["preview"] = (
-            content
-            if len(content) <= preview_limit
-            else content[:preview_limit].rstrip() + "... [truncated]"
-        )
+        if is_error and result.name in ("read_file", "list_dir"):
+            record["error"] = content[:preview_limit]
         return record
 
     async def archive_session(self, start_new: bool = True) -> None:

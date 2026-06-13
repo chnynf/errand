@@ -138,28 +138,16 @@ class PromptAssembler:
         return "\n".join(lines)
 
     def _render_runtime(self) -> str:
-        if self._soul_block is None:
-            self._soul_block = self._render_prompt_resource(
-                name="SHARED_SOUL",
-                resource_path=self._shared_soul,
-                scope_hint="kb",
-            )
-        if self._notes_block is None:
-            self._notes_block = self._render_prompt_resource(
-                name="SHARED_NOTES_INDEX",
-                resource_path=self._shared_notes_index,
-                scope_hint="kb",
-            )
-        if self._profile_block is None:
-            self._profile_block = self._render_prompt_resource(
-                name="AGENT_PROFILE",
-                resource_path=self._agent_profile,
-                scope_hint="kb",
-            )
+        blocks = [
+            ("_soul_block", "SHARED_SOUL", self._shared_soul, SHARED_SOUL_INCLUDE),
+            ("_notes_block", "SHARED_NOTES_INDEX", self._shared_notes_index, SHARED_NOTES_INDEX_INCLUDE),
+            ("_profile_block", "AGENT_PROFILE", self._agent_profile, AGENT_PROFILE_INCLUDE),
+        ]
         runtime = self._runtime_template
-        runtime = runtime.replace(SHARED_SOUL_INCLUDE, self._soul_block)
-        runtime = runtime.replace(SHARED_NOTES_INDEX_INCLUDE, self._notes_block)
-        runtime = runtime.replace(AGENT_PROFILE_INCLUDE, self._profile_block)
+        for attr, name, path, placeholder in blocks:
+            if getattr(self, attr) is None:
+                setattr(self, attr, self._render_prompt_resource(name=name, resource_path=path, scope_hint="kb"))
+            runtime = runtime.replace(placeholder, getattr(self, attr))
         return runtime
 
     @staticmethod
@@ -214,9 +202,5 @@ class PromptAssembler:
                 break
             except ValueError:
                 continue
-        base = "/".join(logical.split("/")[:-1]) + "/"
-        if base == "/":
-            base = "./"
-        if base == "":
-            base = "./"
-        return logical, base
+        base = "/".join(logical.split("/")[:-1])
+        return logical, f"{base}/" if base else "./"

@@ -19,6 +19,15 @@ _store = JobStore()
 DEFAULT_TZ_NAME = "America/New_York"
 
 
+def _resolve_tz(tz: str) -> tuple[str, ZoneInfo | None, str]:
+    """Return (tz_name, ZoneInfo|None, error_msg). On failure, ZoneInfo is None."""
+    tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
+    try:
+        return tz_name, ZoneInfo(tz_name), ""
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return tz_name, None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+
+
 def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[dict | None, str]:
     """Validate inputs and return (schedule, error); schedule is None on error."""
     if kind == "at":
@@ -37,11 +46,10 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
         # model never does timezone math; a value that already carries Z/offset
         # is absolute and converts straight to UTC.
         if dt.tzinfo is None:
-            tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
-            try:
-                dt = dt.replace(tzinfo=ZoneInfo(tz_name))
-            except (ZoneInfoNotFoundError, ValueError, OSError):
-                return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+            tz_name, zone, err = _resolve_tz(tz)
+            if err:
+                return None, err
+            dt = dt.replace(tzinfo=zone)
         else:
             tz_name = "UTC"
         return {"kind": "at", "at": format_iso(dt), "tz": tz_name}, ""
@@ -54,11 +62,9 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
         expr = value.strip()
         if not validate_cron(expr):
             return None, f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
-        tz_name = (tz or "").strip() or DEFAULT_TZ_NAME
-        try:
-            ZoneInfo(tz_name)
-        except (ZoneInfoNotFoundError, ValueError, OSError):
-            return None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+        tz_name, _, err = _resolve_tz(tz)
+        if err:
+            return None, err
         return {"kind": "cron", "expr": expr, "tz": tz_name}, ""
     return None, f"schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
 

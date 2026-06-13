@@ -389,15 +389,11 @@ class DiscordInterface:
         return str(channel_id)
 
     def _guild_entry_from_context(self, context_id: str) -> dict | None:
-        try:
-            context_channel = self._client.get_channel(int(context_id))
-        except ValueError:
-            print(f"Scheduler delivery: invalid context_id {context_id}")
+        guild = self._guild_from_context(context_id)
+        if guild is None:
+            print(f"Scheduler delivery: context channel {context_id} not found or not text/guild")
             return None
-        if isinstance(context_channel, discord.TextChannel) and context_channel.guild:
-            return {"guild_id": context_channel.guild.id}
-        print(f"Scheduler delivery: context channel {context_id} not found or not text/guild")
-        return None
+        return {"guild_id": guild.id}
 
     def _load_mapping(self) -> None:
         if not _MAPPING_FILE.exists():

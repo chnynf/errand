@@ -94,37 +94,37 @@ def _located(path: str, roots: list[Path], scope_name: str, *, base_path: str | 
     return target
 
 
-def _resolve_perm(
-    base: bool | str,
-    agent_overrides: dict,
-    agent_id: str | None,
-    op_key: str,
-) -> bool | str:
-    if agent_id and agent_overrides:
-        override = agent_overrides.get(agent_id, {}).get(op_key)
-        if override is not None:
-            return override
-    return base
+def _preview(text: str, n: int = 200) -> str:
+    return text[:n].replace("\n", "↵")
 
 
-async def _authorize_op(
-    perm: bool | str,
+async def _authorize(
+    file_scope: FileScope,
     scope_name: str,
     context: dict[str, Any] | None,
     *,
+    op_key: str,
     operation: str,
     detail: str,
 ) -> str | None:
     """Return a user-facing block message, or ``None`` if the operation is allowed.
 
-    ``perm`` is the per-operation permission from ``FileScope``:
-    ``True`` → proceed; ``False`` → block; ``"ask"`` → prompt for approval.
+    Looks up ``file_scope.<op_key>`` (with optional per-agent override),
+    then: ``True`` → allow; ``False`` → block; ``"ask"`` → prompt via the
+    reply channel.
     """
+    perm: bool | str = getattr(file_scope, op_key)
+    agent_id = (context or {}).get("agent_id")
+    if agent_id and file_scope.agent_overrides:
+        override = file_scope.agent_overrides.get(agent_id, {}).get(op_key)
+        if override is not None:
+            perm = override
+
     if perm is True:
         return None
     if perm is False:
         return f"Error: '{operation}' is not permitted in file scope '{scope_name}'."
-    # "ask" — route through the reply channel
+
     reply_to = (context or {}).get("reply_to")
     if reply_to is None or not hasattr(reply_to, "request_approval"):
         return (
@@ -230,12 +230,11 @@ async def write_file(
         if len(data) > MAX_WRITE_BYTES:
             raise ValueError(f"Content too large ({len(data)} bytes > {MAX_WRITE_BYTES}).")
         action = "overwrite" if target.exists() else "create"
-        preview = content[:200].replace("\n", "↵")
-        blocked = await _authorize_op(
-            _resolve_perm(file_scope.write, file_scope.agent_overrides, (_context or {}).get("agent_id"), "write"),
-            name, _context,
+        blocked = await _authorize(
+            file_scope, name, _context,
+            op_key="write",
             operation=f"{action} file",
-            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
+            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
         )
         if blocked:
             return blocked
@@ -276,12 +275,11 @@ async def append_file(
         if len(data) > MAX_WRITE_BYTES:
             raise ValueError(f"Content too large ({len(data)} bytes > {MAX_WRITE_BYTES}).")
         action = "append to" if target.exists() else "create and append to"
-        preview = content[:200].replace("\n", "↵")
-        blocked = await _authorize_op(
-            _resolve_perm(file_scope.append, file_scope.agent_overrides, (_context or {}).get("agent_id"), "append"),
-            name, _context,
+        blocked = await _authorize(
+            file_scope, name, _context,
+            op_key="append",
             operation="append to file",
-            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {preview}",
+            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
         )
         if blocked:
             return blocked
@@ -334,16 +332,12 @@ async def edit_file(
                 "Add surrounding context or set replace_all=True."
             )
         replacements = count if replace_all else 1
-        updated = (
-            original.replace(old_string, new_string)
-            if replace_all
-            else original.replace(old_string, new_string, 1)
-        )
-        old_snippet = old_string[:200].replace("\n", "↵")
-        new_snippet = new_string[:200].replace("\n", "↵")
-        blocked = await _authorize_op(
-            _resolve_perm(file_scope.edit, file_scope.agent_overrides, (_context or {}).get("agent_id"), "edit"),
-            name, _context,
+        updated = original.replace(old_string, new_string, -1 if replace_all else 1)
+        old_snippet = _preview(old_string)
+        new_snippet = _preview(new_string)
+        blocked = await _authorize(
+            file_scope, name, _context,
+            op_key="edit",
             operation="edit file",
             detail=(
                 f"Scope: {name}\nPath: {target}\nReplacements: {replacements}\n"
@@ -385,9 +379,9 @@ async def delete_file(
         if is_dir and any(target.iterdir()):
             raise OSError(f"Directory not empty: {target}")
         kind = "directory" if is_dir else "file"
-        blocked = await _authorize_op(
-            _resolve_perm(file_scope.delete, file_scope.agent_overrides, (_context or {}).get("agent_id"), "delete"),
-            name, _context,
+        blocked = await _authorize(
+            file_scope, name, _context,
+            op_key="delete",
             operation=f"delete {kind}",
             detail=f"Scope: {name}\nPath: {target}",
         )

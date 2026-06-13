@@ -78,10 +78,7 @@ class SchedulerService:
                 None if schedule["kind"] == "at"
                 else next_run_after_trigger(schedule, now)
             )
-            if next_run:
-                self._store.update(job["id"], last_run_at=now, next_run_at=next_run)
-            else:
-                self._store.update(job["id"], last_run_at=now, enabled=False)
+            self._store.update(job["id"], last_run_at=now, next_run_at=next_run, enabled=None if next_run else False)
 
             if job["intent"] == "say":
                 response = job["message"]

@@ -279,37 +279,35 @@ class ErrandApp:
         return context_id
 
     def _build_interfaces(self, names: list[str]) -> list[ErrandInterface]:
-        interfaces: list[ErrandInterface] = []
-        for name in names:
+        def _load(name: str):
             if name == "discord":
                 from errand.interfaces.discord_interface import DiscordInterface
-
-                interface = DiscordInterface(self, debug=self.debug)
-                if interface.is_configured():
-                    interfaces.append(interface)
-                else:
-                    print("Skipping Discord interface: DISCORD_TOKEN is not set.")
-            elif name == "cli":
+                return DiscordInterface(self, debug=self.debug), "Discord", "DISCORD_TOKEN is not set."
+            if name == "cli":
                 from errand.interfaces.cli import CliInterface
-
-                interfaces.append(CliInterface(self, debug=self.debug))
-            elif name == "web":
+                return CliInterface(self, debug=self.debug), "CLI", None
+            if name == "web":
                 from errand.interfaces.web import WebInterface
-
-                interfaces.append(WebInterface(self))
-            elif name == "wechat":
+                return WebInterface(self), "Web", None
+            if name == "wechat":
                 from errand.interfaces.wechat_interface import WeChatInterface
+                return (
+                    WeChatInterface(self, debug=self.debug),
+                    "WeChat",
+                    "no credentials found.\nRun: wechat-clawbot-cc setup",
+                )
+            return None, None, None
 
-                interface = WeChatInterface(self, debug=self.debug)
-                if interface.is_configured():
-                    interfaces.append(interface)
-                else:
-                    print(
-                        "Skipping WeChat interface: no credentials found.\n"
-                        "Run: wechat-clawbot-cc setup"
-                    )
-            else:
+        interfaces: list[ErrandInterface] = []
+        for name in names:
+            interface, label, skip_reason = _load(name)
+            if interface is None:
                 print(f"Skipping unknown interface: {name}")
+                continue
+            if skip_reason and not interface.is_configured():
+                print(f"Skipping {label} interface: {skip_reason}")
+                continue
+            interfaces.append(interface)
         return interfaces
 
 

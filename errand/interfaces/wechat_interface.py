@@ -506,12 +506,10 @@ def _save_creds(creds: dict) -> None:
 
 
 def _load_cursor() -> str:
-    if _STATE_FILE.exists():
-        try:
-            return json.loads(_STATE_FILE.read_text()).get("cursor", "")
-        except Exception:
-            pass
-    return ""
+    try:
+        return json.loads(_STATE_FILE.read_text()).get("cursor", "")
+    except Exception:
+        return ""
 
 
 def _save_cursor(cursor: str) -> None:
