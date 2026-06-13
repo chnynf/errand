@@ -10,6 +10,15 @@ plugin, except for files that are either:
 Public module-level functions become tools. Schemas are generated from
 the function signature; descriptions come from the function docstring.
 
+A tool module may optionally export a top-level ``COMPACTORS`` dict
+mapping tool name to a ``(result, params, preview_limit) -> dict``
+function that returns the *tool-specific fields* of the compact memory
+record. The registry merges those at load time and exposes
+``compact_result`` for the agent loop to call before pushing tool
+results into session memory. Tools without a compactor fall back to a
+generic preview, so tool authors only opt in when they want a custom
+history shape.
+
 This is the local equivalent of an MCP tool server; the same Python
 functions can later be wrapped in a stdio MCP server without changing
 the tools themselves.
@@ -23,7 +32,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from errand.contracts.types import ToolDefinition
+from errand.contracts.types import ToolDefinition, ToolCall, ToolResult
 
 TOOLS_DIR = Path(__file__).resolve().parent
 
@@ -56,6 +65,7 @@ class ToolRegistry:
     ):
         self._tools_dir = tools_dir or TOOLS_DIR
         self._tools: dict[str, Callable] = {}
+        self._compactors: dict[str, Callable] = {}
         self._descriptions: list[dict[str, str]] = []
         self._load()
         if can_delegate is not None:
@@ -63,6 +73,7 @@ class ToolRegistry:
 
     def _load(self) -> None:
         self._tools.clear()
+        self._compactors.clear()
         self._descriptions.clear()
 
         for file_path in sorted(glob.glob(os.path.join(str(self._tools_dir), "*.py"))):
@@ -90,6 +101,10 @@ class ToolRegistry:
                         "doc": (inspect.getdoc(obj) or "No description provided.").strip(),
                     }
                 )
+
+            module_compactors = getattr(module, "COMPACTORS", None)
+            if isinstance(module_compactors, dict):
+                self._compactors.update(module_compactors)
 
     def _patch_delegation_description(self, can_delegate: list[str]) -> None:
         """Append the caller's allowed delegate IDs to the invoke_agent description."""
@@ -183,3 +198,37 @@ class ToolRegistry:
     @property
     def names(self) -> list[str]:
         return list(self._tools.keys())
+
+    def compact_result(
+        self,
+        call: ToolCall | None,
+        result: ToolResult,
+        preview_limit: int = 500,
+    ) -> dict[str, Any]:
+        """Build a compact memory record for one tool result.
+
+        Returns a dict shaped for ``Memory._render_tool_record``: always carries
+        ``tool_call_id``, ``name``, ``params``, ``content_chars``; optionally
+        carries ``preview``, ``error``, ``result_ref``, or ``entry_count``
+        depending on the tool's registered compactor (or the generic default).
+        """
+        params = call.params if call else {}
+        record: dict[str, Any] = {
+            "tool_call_id": result.tool_call_id,
+            "name": result.name,
+            "params": params,
+            "content_chars": len(result.content),
+        }
+        compactor = self._compactors.get(result.name, _default_compactor)
+        record.update(compactor(result, params, preview_limit))
+        return record
+
+
+def _default_compactor(result: ToolResult, params: dict[str, Any], preview_limit: int) -> dict[str, Any]:
+    """Generic compactor: truncated preview with an ellipsis marker when cut."""
+    content = result.content
+    preview = (
+        content if len(content) <= preview_limit
+        else content[:preview_limit].rstrip() + "... [truncated]"
+    )
+    return {"preview": preview}

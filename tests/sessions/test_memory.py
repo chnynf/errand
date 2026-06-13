@@ -5,6 +5,7 @@ from errand.sessions.memory import (
     _safe_stem,
     estimate_cost,
 )
+from errand.tools.registry import ToolRegistry
 
 
 def test_history_messages_use_roles_without_persisted_file_contents(
@@ -28,22 +29,12 @@ def test_history_messages_use_roles_without_persisted_file_contents(
             "text_response": None,
         },
     )
-    memory.add_tool_results(
-        [
-            ToolCall(
-                id="tc-1",
-                name="read_file",
-                params={"path": "INDEX.md", "scope": "kb"},
-            )
-        ],
-        [
-            ToolResult(
-                tool_call_id="tc-1",
-                name="read_file",
-                content="# Agent KB\nsecret soul",
-            )
-        ],
+    registry = ToolRegistry()
+    call = ToolCall(id="tc-1", name="read_file", params={"path": "INDEX.md", "scope": "kb"})
+    result = ToolResult(
+        tool_call_id="tc-1", name="read_file", content="# Agent KB\nsecret soul"
     )
+    memory.add_tool_results([registry.compact_result(call, result)])
     memory.add_history(
         "ai",
         {

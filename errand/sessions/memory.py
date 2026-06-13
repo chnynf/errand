@@ -15,8 +15,6 @@ from typing import Any, Dict, Iterable, Optional
 
 import aiofiles
 
-from errand.contracts.types import ToolCall, ToolResult
-
 _SESSION_DIR = Path(__file__).resolve().parent / "_data"
 _MAX_HISTORY_ENTRIES = 400
 # Characters that are illegal in Windows filenames (e.g. ``:`` in WeChat and
@@ -130,17 +128,15 @@ class Memory:
         }
         self.data["history"].append(entry)
 
-    def add_tool_results(
-        self,
-        tool_calls: Iterable[ToolCall],
-        tool_results: Iterable[ToolResult],
-    ) -> None:
-        """Persist compact tool-result records without copying bulky contents."""
-        calls_by_id = {call.id: call for call in tool_calls}
-        entries = []
-        for result in tool_results:
-            call = calls_by_id.get(result.tool_call_id)
-            entries.append(self._compact_tool_result(call, result))
+    def add_tool_results(self, records: Iterable[dict]) -> None:
+        """Persist already-compact tool-result records as one history entry.
+
+        Records must follow the compact-record schema (see
+        ``_render_tool_record``). The agent loop builds them via
+        ``ToolRegistry.compact_result`` so Memory stays decoupled from
+        individual tool names.
+        """
+        entries = list(records)
         if entries:
             self.add_history("tool", entries)
 
@@ -253,6 +249,16 @@ class Memory:
 
     @staticmethod
     def _render_tool_record(record: dict[str, Any]) -> str:
+        """Render one compact tool record into a model-facing tool message body.
+
+        Compact-record schema (owned by Memory; produced by
+        ``ToolRegistry.compact_result``):
+
+        - Required: ``tool_call_id``, ``name``, ``content_chars``, ``params``.
+        - Optional, checked in priority order: ``error`` > ``preview`` >
+          ``result_ref`` (with ``type``/``scope``/``path``) > ``entry_count``.
+          When none are present the renderer falls back to a chars summary.
+        """
         if record.get("error"):
             return str(record["error"])
         if record.get("preview"):
@@ -265,47 +271,6 @@ class Memory:
         if "entry_count" in record:
             return f"{record['name']}: {record['entry_count']} entries"
         return f"{record['name']}: {record.get('content_chars', 0)} chars"
-
-    @staticmethod
-    def _compact_tool_result(
-        call: Optional[ToolCall],
-        result: ToolResult,
-        preview_limit: int = 500,
-    ) -> dict[str, Any]:
-        params = call.params if call else {}
-        content = result.content
-        is_error = content.startswith("Error:")
-        record: dict[str, Any] = {
-            "tool_call_id": result.tool_call_id,
-            "name": result.name,
-            "params": params,
-            "content_chars": len(content),
-        }
-
-        def ref(kind: str, default_path: Any = None) -> dict:
-            return {"type": kind, "scope": params.get("scope", "kb"), "path": params.get("path", default_path)}
-
-        if result.name == "read_file":
-            record["result_ref"] = ref("file")
-        elif result.name == "list_dir":
-            record["result_ref"] = ref("directory", default_path="")
-            record["entry_count"] = 0 if is_error else sum(1 for line in content.splitlines() if line.strip())
-        elif result.name in ("write_file", "edit_file", "delete_file"):
-            # Keep history small: do not persist large write payloads verbatim.
-            record["params"] = {k: v for k, v in params.items() if k not in ("content", "old_string", "new_string")}
-            record["result_ref"] = ref("file")
-            record["preview"] = content[:preview_limit]
-        elif result.name in ("grep_files", "find_files"):
-            record["preview"] = content[:preview_limit]
-        else:
-            record["preview"] = (
-                content if len(content) <= preview_limit
-                else content[:preview_limit].rstrip() + "... [truncated]"
-            )
-
-        if is_error and result.name in ("read_file", "list_dir"):
-            record["error"] = content[:preview_limit]
-        return record
 
     async def archive_session(self, start_new: bool = True) -> None:
         if os.path.exists(self.session_file):

@@ -10,7 +10,7 @@ import pytest
 
 from errand.config import ErrandConfig, FileAccessConfig, FileScope
 from errand.contracts.types import ToolCall, ToolResult
-from errand.sessions.memory import Memory
+from errand.tools.registry import ToolRegistry
 from errand.tools import files as ft
 
 
@@ -375,7 +375,7 @@ def test_memory_strips_large_write_payload():
         name="write_file",
         content="Wrote 10000 bytes to /kb/notes/big.md.",
     )
-    record = Memory._compact_tool_result(call, result)
+    record = ToolRegistry().compact_result(call, result)
     assert "content" not in record["params"]
     assert record["result_ref"] == {"type": "file", "scope": "kb", "path": "notes/big.md"}
     assert record["content_chars"] == len(result.content)

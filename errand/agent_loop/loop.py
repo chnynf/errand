@@ -206,7 +206,12 @@ class AgentLoop:
                         scheduled_messages.append(tr.content)
 
                 if last_tool_results:
-                    self.memory.add_tool_results(tool_calls, last_tool_results)
+                    calls_by_id = {tc.id: tc for tc in tool_calls}
+                    records = [
+                        self.tool_registry.compact_result(calls_by_id.get(tr.tool_call_id), tr)
+                        for tr in last_tool_results
+                    ]
+                    self.memory.add_tool_results(records)
                 messages.append(self._assistant_tool_message(tool_calls, decision.reasoning_content))
                 messages.extend(self._tool_result_messages(last_tool_results))
 
