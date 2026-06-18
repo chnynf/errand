@@ -26,6 +26,7 @@ from errand.contracts.types import (
     ToolResult,
 )
 from errand.runtime.debug import debug_log
+from errand.runtime.run_context import RunContext
 from errand.sessions.memory import Memory
 from errand.tools.registry import ToolRegistry
 
@@ -78,7 +79,13 @@ class AgentLoop:
         debug_log(input_title, user_input, extra=f"agent={self.agent_id}", truncate=False)
         self.memory.add_history("scheduled" if is_scheduled else "user", user_input)
 
-        reply_to = m.get("_reply_to")
+        # Root exchanges create the RunContext (+ its UsageTracker); delegated
+        # child loops reuse the parent's so usage rolls up across agents.
+        run_context: RunContext = m.get("_run_context") or RunContext.root(
+            reply_to=m.get("_reply_to"),
+            source=m.get("_source"),
+        )
+        reply_to = run_context.reply_to
 
         async def _progress(message: str) -> None:
             if reply_to and not is_subagent:
@@ -99,12 +106,7 @@ class AgentLoop:
         hit_tool_cap = False
         suppress_usage_footer = bool(m.get("suppress_usage_footer"))
 
-        round_input_tokens = 0
-        round_output_tokens = 0
-        round_cache_creation_tokens = 0
-        round_cache_read_tokens = 0
         round_tools_used: list[str] = []
-        round_models_used: list[str] = []
         last_tool_results: list[ToolResult] = []
         scheduled_messages: list[str] = []
         next_log_extra: Optional[str] = None
@@ -122,6 +124,7 @@ class AgentLoop:
                 tool_definitions=[] if force_respond else tool_definitions,
                 session_id=self.memory.session_id,
                 log_extra=next_log_extra,
+                usage_tracker=run_context.usage,
             )
             next_log_extra = None
 
@@ -129,13 +132,8 @@ class AgentLoop:
             usage = brain_output["usage"]
 
             if not brain_output.get("error"):
-                round_input_tokens += usage.get("input_tokens", 0)
-                round_output_tokens += usage.get("output_tokens", 0)
-                round_cache_creation_tokens += usage.get("cache_creation_tokens", 0)
-                round_cache_read_tokens += usage.get("cache_read_tokens", 0)
-                if usage.get("model"):
-                    round_models_used.append(usage.get("model").split("/")[-1])
-
+                # Per-exchange totals (incl. sub-agents) live on the tracker via
+                # the Brain; here we only persist the per-session lifetime total.
                 self.memory.update_token_usage(usage)
 
             if brain_output.get("error"):
@@ -186,8 +184,9 @@ class AgentLoop:
                                 "session_id": self.memory.session_id,
                                 "delegation_depth": self.delegation_depth,
                                 "debug": self.debug,
-                                "reply_to": m.get("_reply_to"),
-                                "source": m.get("_source"),
+                                "reply_to": run_context.reply_to,
+                                "source": run_context.source,
+                                "run_context": run_context,
                             },
                         )
                         return ToolResult(tool_call_id=tc.id, name=tc.name, content=str(result))
@@ -259,19 +258,12 @@ class AgentLoop:
             )
 
         tools_str = ", ".join(dict.fromkeys(round_tools_used)) or "None"
-        models_str = ", ".join(dict.fromkeys(round_models_used)) or "None"
 
-        # cache_read is a subset of input_tokens (a "cache hit"); cache_write
-        # is Anthropic-only and stays 0 for DeepSeek/Gemini, so hide it then.
-        cache_bits = []
-        if round_cache_read_tokens:
-            cache_bits.append(f"{round_cache_read_tokens} cached")
-        if round_cache_creation_tokens:
-            cache_bits.append(f"{round_cache_creation_tokens} cache-write")
-        cache_str = f" ({', '.join(cache_bits)})" if cache_bits else ""
+        # The tracker holds this whole exchange's usage (this agent + any
+        # sub-agents it delegated to). Tools stay loop-local. cache_read is a
+        # subset of input_tokens; cache-write is hidden when 0 (non-Anthropic).
         usage_msg = (
-            f"\n\n---\n*Models used: {models_str}*\n"
-            f"*Tokens: {round_input_tokens} in{cache_str}, {round_output_tokens} out*\n"
+            f"\n\n---\n{run_context.usage.render_footer()}\n"
             f"*Tools used: {tools_str}*"
         )
         if is_scheduled:

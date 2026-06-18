@@ -140,6 +140,41 @@ async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
     assert usage["model"] == "openai/deepseek-ai/DeepSeek-V3"
 
 
+async def test_decide_records_usage_into_tracker_under_agent_id(brain):
+    """Brain is the emitter: a successful call records into the passed tracker.
+
+    The retryable first model must NOT record (it failed); only the model that
+    actually returned a response contributes usage.
+    """
+    from litellm.exceptions import RateLimitError
+
+    from errand.runtime.run_context import UsageTracker
+
+    brain.agent_id = "notes-organizer"
+    tracker = UsageTracker()
+
+    rate_limit = RateLimitError(
+        message="too many", llm_provider="gemini", model="gemini-3-flash-preview"
+    )
+    success_response = _mk_response(content="ok\n---\nContext: cs")
+    mock_acompletion = AsyncMock(side_effect=[rate_limit, success_response])
+    with patch(
+        "errand.brain.providers.litellm.litellm.acompletion",
+        new=mock_acompletion,
+    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
+        await brain.decide(
+            messages=[{"role": "user", "content": "hi"}],
+            usage_tracker=tracker,
+        )
+
+    # prompt_tokens=3 / completion_tokens=4 come from _mk_response; only the
+    # one successful call is recorded, attributed to this brain's agent_id.
+    assert tracker.calls == 1
+    assert tracker.input_tokens == 3
+    assert tracker.output_tokens == 4
+    assert "notes-organizer" in tracker.per_agent()
+
+
 async def test_decide_can_resume_after_failed_model_key(brain):
     """Continuation fallback can skip a failed model key and resume strategy order."""
     tool_def = ToolDefinition(

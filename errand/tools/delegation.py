@@ -82,6 +82,9 @@ async def invoke_agent(
                     "parent_agent_id": caller.id,
                     "_reply_to": runtime_context.get("reply_to"),
                     "_source": runtime_context.get("source"),
+                    # Reuse the parent's RunContext so the child's token usage
+                    # rolls up into the same per-exchange tracker.
+                    "_run_context": runtime_context.get("run_context"),
                 },
             ),
             timeout=DEFAULT_TIMEOUT_SECONDS,

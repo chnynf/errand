@@ -144,11 +144,16 @@ class Brain:
         start_after_model_key: Optional[str] = None,
         session_id: Optional[str] = None,
         log_extra: Optional[str] = None,
+        usage_tracker: Any = None,
     ) -> Dict[str, Any]:
         """Ask the Brain to decide the next action.
 
         Returns a dict with keys: decision (BrainDecision), usage (dict),
         and optionally error (bool) / error_message (str).
+
+        When ``usage_tracker`` is provided, the Brain records each successful
+        call's usage into it (the Brain is the single emitter; it never owns
+        or aggregates the tracker -- see ``runtime.run_context``).
         """
         max_attempts = len(self.model_strategy)
         last_exception: Optional[Exception] = None
@@ -201,6 +206,9 @@ class Brain:
                 usage_data["model"] = actual_model
                 usage_data["model_key"] = model_key
                 usage_data["pricing"] = (self.models_config.get(model_key) or {}).get("pricing")
+
+                if usage_tracker is not None:
+                    usage_tracker.record(usage_data, agent_id=self.agent_id)
 
                 if decision.tool_calls:
                     tc_desc = "; ".join(
