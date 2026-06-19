@@ -22,8 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from errand.sessions.memory import estimate_cost
-
 
 @dataclass
 class AgentUsage:
@@ -33,7 +31,6 @@ class AgentUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
-    cost: float = 0.0
     calls: int = 0
     models: List[str] = field(default_factory=list)
 
@@ -63,9 +60,6 @@ class UsageTracker:
         bucket.output_tokens += output_tokens
         bucket.cache_read_tokens += cache_read
         bucket.cache_creation_tokens += cache_creation
-        bucket.cost += estimate_cost(
-            input_tokens, output_tokens, cache_read, usage.get("pricing")
-        )
         bucket.calls += 1
 
         model = usage.get("model")
@@ -89,10 +83,6 @@ class UsageTracker:
     @property
     def cache_creation_tokens(self) -> int:
         return sum(a.cache_creation_tokens for a in self._by_agent.values())
-
-    @property
-    def cost(self) -> float:
-        return sum(a.cost for a in self._by_agent.values())
 
     @property
     def calls(self) -> int:
@@ -133,8 +123,6 @@ class UsageTracker:
                     f"*  └ {agent_id}: {bucket.input_tokens} in, "
                     f"{bucket.output_tokens} out*"
                 )
-        if self.cost:
-            lines.append(f"*Est. cost: ${self.cost:.4f}*")
         return "\n".join(lines)
 
 

@@ -205,7 +205,6 @@ class Brain:
 
                 usage_data["model"] = actual_model
                 usage_data["model_key"] = model_key
-                usage_data["pricing"] = (self.models_config.get(model_key) or {}).get("pricing")
 
                 if usage_tracker is not None:
                     usage_tracker.record(usage_data, agent_id=self.agent_id)

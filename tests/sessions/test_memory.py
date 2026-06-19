@@ -3,7 +3,6 @@ from errand.sessions.memory import (
     IDLE_BOUNDARY_NOTE,
     Memory,
     _safe_stem,
-    estimate_cost,
 )
 from errand.tools.registry import ToolRegistry
 
@@ -119,55 +118,19 @@ def test_safe_stem_replaces_windows_illegal_chars():
     assert _safe_stem('a:b/c\\d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
 
 
-def test_estimate_cost_prices_cache_hits_cheaper():
-    pricing = {"input": 0.14, "output": 0.28, "cache_read": 0.0028}
-    # 1,000,000 input of which 800,000 are cache hits, 500,000 output.
-    cost = estimate_cost(1_000_000, 500_000, 800_000, pricing)
-    expected = (
-        (200_000 / 1_000_000) * 0.14   # fresh input
-        + (800_000 / 1_000_000) * 0.0028  # cached input
-        + (500_000 / 1_000_000) * 0.28    # output
-    )
-    assert cost == expected
-
-
-def test_estimate_cost_zero_when_no_pricing():
-    assert estimate_cost(1000, 1000, 0, None) == 0.0
-
-
-def test_estimate_cost_defaults_cache_rate_to_input_when_absent():
-    pricing = {"input": 1.0, "output": 2.0}
-    # No cache_read configured: cached tokens fall back to the input rate.
-    cost = estimate_cost(1_000_000, 0, 400_000, pricing)
-    assert cost == 1.0
-
-
-def test_update_token_usage_accumulates_counts_and_cost(monkeypatch, tmp_path):
+def test_update_token_usage_accumulates_counts(monkeypatch, tmp_path):
     monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
-    memory = Memory("cost-session")
+    memory = Memory("count-session")
 
     memory.update_token_usage(
-        {
-            "input_tokens": 1_000_000,
-            "output_tokens": 500_000,
-            "cache_read_tokens": 800_000,
-            "pricing": {"input": 0.14, "output": 0.28, "cache_read": 0.0028},
-        }
+        {"input_tokens": 1_000_000, "output_tokens": 500_000, "cache_read_tokens": 800_000}
     )
     memory.update_token_usage(
-        {
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "cache_read_tokens": 0,
-            "pricing": None,  # unpriced model contributes 0 cost
-        }
+        {"input_tokens": 100, "output_tokens": 50, "cache_read_tokens": 0}
     )
 
     summary = memory.data["token_summary"]
     assert summary["input_tokens"] == 1_000_100
     assert summary["output_tokens"] == 500_050
     assert summary["cache_read_tokens"] == 800_000
-    expected_cost = estimate_cost(
-        1_000_000, 500_000, 800_000, {"input": 0.14, "output": 0.28, "cache_read": 0.0028}
-    )
-    assert summary["total_cost"] == expected_cost
+    assert "total_cost" not in summary

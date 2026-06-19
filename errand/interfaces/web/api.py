@@ -114,14 +114,14 @@ def build_api(swarm_app: "ErrandApp") -> FastAPI:
 
     @app.get("/api/tokens")
     async def get_tokens() -> JSONResponse:
-        metric_keys = ("input_tokens", "output_tokens", "cache_read_tokens", "total_cost")
-        daily: dict[str, dict[str, float]] = {}
-        totals = {k: 0.0 if k == "total_cost" else 0 for k in metric_keys}
+        metric_keys = ("input_tokens", "output_tokens", "cache_read_tokens")
+        daily: dict[str, dict[str, int]] = {}
+        totals = {k: 0 for k in metric_keys}
 
         for s in _load_sessions():
             summary = s.get("token_summary", {})
             day = s.get("day", "unknown")
-            bucket = daily.setdefault(day, {k: 0.0 if k == "total_cost" else 0 for k in metric_keys})
+            bucket = daily.setdefault(day, {k: 0 for k in metric_keys})
             for k in metric_keys:
                 v = summary.get(k, 0)
                 bucket[k] += v
@@ -131,7 +131,6 @@ def build_api(swarm_app: "ErrandApp") -> FastAPI:
             "total_input_tokens": totals["input_tokens"],
             "total_output_tokens": totals["output_tokens"],
             "total_cache_read_tokens": totals["cache_read_tokens"],
-            "total_cost_usd": round(totals["total_cost"], 4),
             "by_day": daily,
         })
 

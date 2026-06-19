@@ -267,11 +267,8 @@ class AgentLoop:
         session = self.memory.data.get("token_summary", {})
         session_line = (
             f"*Session total: {session.get('input_tokens', 0)} in, "
-            f"{session.get('output_tokens', 0)} out"
+            f"{session.get('output_tokens', 0)} out*"
         )
-        if session.get("total_cost"):
-            session_line += f", ${session['total_cost']:.4f}"
-        session_line += "*"
         usage_msg = (
             f"\n\n---\n{run_context.usage.render_footer()}\n"
             f"{session_line}\n"

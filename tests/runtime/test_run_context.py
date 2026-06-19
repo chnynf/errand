@@ -46,14 +46,6 @@ def test_rollup_across_parent_and_subagent():
     assert breakdown["notes-organizer"].input_tokens == 151_000
 
 
-def test_cost_splits_cached_and_fresh_input():
-    t = UsageTracker()
-    t.record(_usage(1_000, 100, cache_read=400), agent_id="generalist")
-    # fresh 600 @0.30 + cached 400 @0.075 + out 100 @2.50, all per-1M
-    expected = (600 / 1e6) * 0.30 + (400 / 1e6) * 0.075 + (100 / 1e6) * 2.50
-    assert abs(t.cost - expected) < 1e-12
-
-
 def test_footer_shows_breakdown_only_when_multiple_agents():
     solo = UsageTracker()
     solo.record(_usage(100, 10), agent_id="generalist")
@@ -67,10 +59,22 @@ def test_footer_shows_breakdown_only_when_multiple_agents():
     assert "└" in footer
 
 
-def test_missing_pricing_contributes_zero_cost():
+def test_cache_creation_tokens_counted_without_cost():
+    """Anthropic-style cache-write tokens are still COUNTED (model-agnostic),
+    even though Errand no longer prices them."""
     t = UsageTracker()
-    t.record(_usage(1_000, 100, pricing=None), agent_id="generalist")
-    assert t.cost == 0.0
+    t.record(
+        {
+            "input_tokens": 1_000,
+            "output_tokens": 200,
+            "cache_read_tokens": 400,
+            "cache_creation_tokens": 500,
+            "model": "anthropic/claude-x",
+        },
+        agent_id="generalist",
+    )
+    assert t.cache_creation_tokens == 500
+    assert t.cache_read_tokens == 400
     assert t.input_tokens == 1_000
 
 
