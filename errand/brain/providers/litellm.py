@@ -106,10 +106,11 @@ def _extract_usage(response) -> dict:
 def _cache_system_message(message: dict) -> dict:
     """Wrap the system prompt with a cache_control breakpoint.
 
-    LiteLLM translates the ``cache_control`` field to the correct
-    provider format (Anthropic ``cache_control`` blocks, Gemini
-    ``cachedContents``).  Providers that don't support caching
-    silently ignore the field.
+    This is an Anthropic-style explicit breakpoint: LiteLLM maps it to
+    Anthropic ``cache_control`` blocks. It is a NO-OP for Gemini and DeepSeek
+    -- they use *implicit* (automatic, prefix-based) caching that needs no
+    flag, so the cache hits we see on those providers come from implicit
+    caching, not from this breakpoint. Providers ignore the field harmlessly.
     """
     if message.get("role") != "system" or not isinstance(message.get("content"), str):
         return message

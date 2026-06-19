@@ -262,8 +262,19 @@ class AgentLoop:
         # The tracker holds this whole exchange's usage (this agent + any
         # sub-agents it delegated to). Tools stay loop-local. cache_read is a
         # subset of input_tokens; cache-write is hidden when 0 (non-Anthropic).
+        # The session total is this conversation's running lifetime, persisted
+        # per-session in memory (this agent only; sub-agents keep their own).
+        session = self.memory.data.get("token_summary", {})
+        session_line = (
+            f"*Session total: {session.get('input_tokens', 0)} in, "
+            f"{session.get('output_tokens', 0)} out"
+        )
+        if session.get("total_cost"):
+            session_line += f", ${session['total_cost']:.4f}"
+        session_line += "*"
         usage_msg = (
             f"\n\n---\n{run_context.usage.render_footer()}\n"
+            f"{session_line}\n"
             f"*Tools used: {tools_str}*"
         )
         if is_scheduled:
