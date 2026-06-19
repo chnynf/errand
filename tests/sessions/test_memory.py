@@ -3,8 +3,12 @@ from errand.sessions.memory import (
     IDLE_BOUNDARY_NOTE,
     Memory,
     _safe_stem,
+    strip_tool_call_signature,
 )
 from errand.tools.registry import ToolRegistry
+
+# A Gemini-style id with a thought signature smuggled in by LiteLLM.
+_THOUGHT_ID = "call_82d77cbf__thought__EoCaAQr8mQEBDDnWxxktVVmd" * 4
 
 
 def test_history_messages_use_roles_without_persisted_file_contents(
@@ -65,6 +69,76 @@ def test_history_messages_use_roles_without_persisted_file_contents(
         "path": "INDEX.md",
     }
     assert "secret soul" not in str(stored_result)
+
+
+def test_strip_tool_call_signature():
+    # Gemini thought signature is removed, leaving the stable handle.
+    assert strip_tool_call_signature(_THOUGHT_ID) == "call_82d77cbf"
+    # Plain ids from other providers are untouched (no marker -> no-op).
+    assert strip_tool_call_signature("call_abc123") == "call_abc123"
+    assert strip_tool_call_signature("tc-1") == "tc-1"
+    assert strip_tool_call_signature("") == ""
+
+
+def test_thought_signature_stripped_on_persist_and_replay(monkeypatch, tmp_path):
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("sig-session")
+
+    memory.add_history("user", "What's for dinner?")
+    memory.add_history(
+        "ai",
+        {
+            "tool_calls": [
+                {"id": _THOUGHT_ID, "name": "read_file",
+                 "params": {"path": "meal.md", "scope": "notes"}}
+            ],
+            "text_response": None,
+        },
+    )
+    registry = ToolRegistry()
+    call = ToolCall(id=_THOUGHT_ID, name="read_file", params={"path": "meal.md", "scope": "notes"})
+    result = ToolResult(tool_call_id=_THOUGHT_ID, name="read_file", content="pasta")
+    memory.add_tool_results([registry.compact_result(call, result)])
+
+    # Persisted to disk without the blob.
+    ai_entry = next(e for e in memory.data["history"] if e["role"] == "ai")
+    assert ai_entry["content"]["tool_calls"][0]["id"] == "call_82d77cbf"
+    tool_entry = next(e for e in memory.data["history"] if e["role"] == "tool")
+    assert tool_entry["content"][0]["tool_call_id"] == "call_82d77cbf"
+    assert "__thought__" not in str(memory.data["history"])
+
+    # Replayed history keeps assistant/tool ids matched and blob-free.
+    messages = memory.build_history_messages()
+    assert messages[1]["tool_calls"][0]["id"] == "call_82d77cbf"
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["tool_call_id"] == "call_82d77cbf"
+    assert "__thought__" not in str(messages)
+
+
+def test_legacy_session_with_blob_ids_is_stripped_on_read(monkeypatch, tmp_path):
+    # Simulate a session persisted before the fix: full blob ids on disk.
+    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("legacy-session")
+    memory.data["history"] = [
+        {"role": "user", "content": "hi", "metadata": {}},
+        {"role": "ai", "content": {
+            "tool_calls": [{"id": _THOUGHT_ID, "name": "read_file",
+                            "params": {"path": "x.md", "scope": "kb"}}],
+            "text_response": None}, "metadata": {}},
+        {"role": "tool", "content": [{
+            "tool_call_id": _THOUGHT_ID, "name": "read_file",
+            "params": {"path": "x.md", "scope": "kb"}, "content_chars": 5,
+            "result_ref": {"type": "file", "scope": "kb", "path": "x.md"}}],
+         "metadata": {}},
+    ]
+
+    messages = memory.build_history_messages()
+
+    # The assistant + tool pair still resolves (ids matched after stripping).
+    assert messages[1]["tool_calls"][0]["id"] == "call_82d77cbf"
+    assert messages[2]["role"] == "tool"
+    assert messages[2]["tool_call_id"] == "call_82d77cbf"
+    assert "__thought__" not in str(messages)
 
 
 def test_scheduled_history_renders_as_user_message(monkeypatch, tmp_path):

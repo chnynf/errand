@@ -26,6 +26,28 @@ def _safe_stem(session_id: str) -> str:
     return "".join("_" if c in _FILENAME_ILLEGAL else c for c in session_id)
 
 
+# Marker LiteLLM uses to smuggle a provider "thought signature" into a
+# tool_call id (Gemini 3: ``call_xxx__thought__<base64 blob>``). The blob can
+# be tens of thousands of tokens and is only meaningful within the live turn;
+# persisting and re-sending it across turns bloats every subsequent request.
+_SIGNATURE_MARKER = "__thought__"
+
+
+def strip_tool_call_signature(tool_call_id: str) -> str:
+    """Return the stable ``call_xxx`` handle, dropping any thought signature.
+
+    Errand never needs the signature once a turn is persisted: history is
+    replayed only to give the model prior context, and the assistant tool_call
+    id and its matching tool-result id are stripped identically, so the message
+    sequence stays valid. For providers that return plain ids (no marker) this
+    is a no-op, so the fix is safe across all models.
+    """
+    if not tool_call_id:
+        return tool_call_id
+    marker = tool_call_id.find(_SIGNATURE_MARKER)
+    return tool_call_id[:marker] if marker != -1 else tool_call_id
+
+
 IDLE_BOUNDARY_NOTE = (
     "There was a long idle gap in this conversation. Treat the current message "
     "as a new topic if it does not appear related to the last exchange."
@@ -92,6 +114,10 @@ class Memory:
             await f.write(json.dumps(self.data, indent=2, ensure_ascii=False))
 
     def add_history(self, role: str, content: Any, metadata: Optional[Dict] = None) -> None:
+        if role == "ai" and isinstance(content, dict):
+            for call in content.get("tool_calls") or []:
+                if isinstance(call, dict) and call.get("id"):
+                    call["id"] = strip_tool_call_signature(call["id"])
         entry = {
             "timestamp": time.time(),
             "role": role,
@@ -109,6 +135,9 @@ class Memory:
         individual tool names.
         """
         entries = list(records)
+        for rec in entries:
+            if rec.get("tool_call_id"):
+                rec["tool_call_id"] = strip_tool_call_signature(rec["tool_call_id"])
         if entries:
             self.add_history("tool", entries)
 
@@ -184,7 +213,7 @@ class Memory:
                 "role": "assistant",
                 "tool_calls": [
                     {
-                        "id": call["id"],
+                        "id": strip_tool_call_signature(call["id"]),
                         "type": "function",
                         "function": {
                             "name": call["name"],
@@ -199,16 +228,21 @@ class Memory:
 
     @classmethod
     def _matching_tool_messages(cls, tool_calls: list[dict], records: Any) -> list[dict]:
+        # ``tool_calls`` ids are already stripped by ``_ai_message``; strip the
+        # record ids too so legacy sessions (full ids on disk) still match.
         expected_ids = {call["id"] for call in tool_calls}
-        return [
-            {
-                "role": "tool",
-                "tool_call_id": record["tool_call_id"],
-                "content": cls._render_tool_record(record),
-            }
-            for record in records
-            if record["tool_call_id"] in expected_ids
-        ]
+        messages = []
+        for record in records:
+            rid = strip_tool_call_signature(record["tool_call_id"])
+            if rid in expected_ids:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": rid,
+                        "content": cls._render_tool_record(record),
+                    }
+                )
+        return messages
 
     @staticmethod
     def _render_tool_record(record: dict[str, Any]) -> str:
