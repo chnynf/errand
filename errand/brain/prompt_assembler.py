@@ -50,12 +50,16 @@ class PromptAssembler:
         agent_profile: Optional[str] = None,
         file_access: Optional[FileAccessConfig] = None,
         shared_notes_index: Optional[str] = None,
+        tool_summary: Optional[str] = None,
     ):
         self._runtime_template = self._load("runtime.md")
         self._shared_soul = shared_soul
         self._shared_notes_index = shared_notes_index
         self._agent_profile = agent_profile
         self._file_access = file_access or FileAccessConfig()
+        # Tool-component-authored cross-tool guidance, placed verbatim. The
+        # assembler only positions it; the tools component owns the text.
+        self._tool_summary = tool_summary
         # Cached rendered blocks — static for the process lifetime.
         self._soul_block: Optional[str] = None
         self._notes_block: Optional[str] = None
@@ -89,6 +93,8 @@ class PromptAssembler:
         """
         parts = [self._render_runtime()]
 
+        if self._tool_summary:
+            parts.append(self._tool_summary)
         if self._file_access.scopes:
             parts.append(self._file_access_section())
 

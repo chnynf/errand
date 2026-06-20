@@ -205,3 +205,12 @@ def test_compact_result_tool_without_compactor_falls_back_to_default():
     assert record["preview"] == "5"
     assert "result_ref" not in record
     assert "error" not in record
+
+
+def test_tool_summary_carries_cross_tool_nudges():
+    summary = ToolRegistry().tool_summary()
+    assert "TOOL USE:" in summary
+    # the three decisioning nudges
+    assert "Think before calling" in summary
+    assert "Route, don't search" in summary
+    assert "Batch independent work" in summary

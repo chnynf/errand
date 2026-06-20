@@ -17,10 +17,16 @@ def test_system_prompt_stable_no_current_context():
     assert "Errand Runtime" in prompt
 
 
-def test_system_prompt_nudges_parallel_tool_calls():
-    # B2: cross-tool batching policy lives in the runtime tools section.
-    prompt = PromptAssembler().build_system_prompt()
-    assert "parallel tool calls" in prompt
+def test_tool_summary_is_placed_verbatim_when_provided():
+    # The tools component authors the summary; the assembler only positions it.
+    assembler = PromptAssembler(tool_summary="TOOL USE:\n- batch in parallel.")
+    prompt = assembler.build_system_prompt()
+    assert "TOOL USE:" in prompt
+    assert "batch in parallel." in prompt
+
+
+def test_tool_summary_absent_when_not_provided():
+    assert "TOOL USE:" not in PromptAssembler().build_system_prompt()
 
 
 def test_context_messages_include_current_context():

@@ -142,10 +142,12 @@ async def _authorize(
 
 
 def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
-    """Read a UTF-8 text file from a configured file scope.
+    """Read a known file path. Reads agent knowledge, profiles, SOPs, notes.
 
-    Use for agent knowledge, profiles, SOPs, notes, or any file in a granted
-    scope. For knowledge-base work use the default ``kb`` scope.
+    Prefer this once you know where something lives (from an index or a prior
+    search) instead of browsing for it. Reads one file; when you need several,
+    issue multiple read_file calls in a single round (the runtime runs them
+    concurrently). For knowledge-base work use the default ``kb`` scope.
 
     Args:
         path: File path inside the scope. Relative paths resolve against the
@@ -170,18 +172,22 @@ def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
         return f"Error: {exc}"
 
 
-def list_dir(path: str = "", scope: str = "kb", base_path: str = "") -> str:
-    """List entries in a directory from a configured file scope.
+def list_dir(path: str = "", scope: str = "kb", base_path: str = "", depth: int = 1) -> str:
+    """List directory entries from a file scope; one level, or a deeper tree.
 
-    Use to discover files before reading them. An empty ``path`` lists the
-    scope root. Directories are suffixed with ``/``; dotfiles are hidden.
+    Use to orient within a scope. To see a whole subtree, call once with a
+    larger ``depth`` rather than many single-level lists. To locate files by
+    name use ``find_files``; to find content use ``grep_files``. Directories
+    are suffixed with ``/``; dotfiles are hidden.
 
     Args:
         path: Directory path inside the scope. Empty lists the scope root.
         scope: Configured file scope. Defaults to ``kb``.
         base_path: Optional base file/dir (same scope) for resolving relatives.
+        depth: Levels to descend. 1 (default) lists only the immediate entries;
+            higher values return an indented tree of nested entries.
 
-    Returns: Newline-separated entries, or an ``Error: ...`` message.
+    Returns: Entries (indented tree when depth > 1), or an ``Error: ...`` message.
     """
     try:
         name, file_scope, roots = _scope(scope)
@@ -190,14 +196,34 @@ def list_dir(path: str = "", scope: str = "kb", base_path: str = "") -> str:
         target = _located(path, roots, name, base_path=base_path or None) if path else roots[0]
         if not target.is_dir():
             raise NotADirectoryError(f"Not a directory: {target}")
-        entries = [
-            f"{entry.name}{'/' if entry.is_dir() else ''}"
-            for entry in sorted(target.iterdir(), key=lambda p: p.name)
-            if not entry.name.startswith(".")
-        ]
-        if not entries:
+
+        if depth <= 1:
+            entries = [
+                f"{entry.name}{'/' if entry.is_dir() else ''}"
+                for entry in sorted(target.iterdir(), key=lambda p: p.name)
+                if not entry.name.startswith(".")
+            ]
+            if not entries:
+                return f"(empty directory: {path or '.'})"
+            return "\n".join(entries)
+
+        lines: list[str] = []
+        truncated = False
+        for entry in sorted(target.rglob("*"), key=lambda p: str(p.relative_to(target))):
+            rel = entry.relative_to(target)
+            if len(rel.parts) > depth or any(part.startswith(".") for part in rel.parts):
+                continue
+            indent = "  " * (len(rel.parts) - 1)
+            lines.append(f"{indent}{entry.name}{'/' if entry.is_dir() else ''}")
+            if len(lines) >= MAX_FIND_RESULTS:
+                truncated = True
+                break
+        if not lines:
             return f"(empty directory: {path or '.'})"
-        return "\n".join(entries)
+        out = "\n".join(lines)
+        if truncated:
+            out += f"\n... [truncated at {MAX_FIND_RESULTS} entries]"
+        return out
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -394,9 +420,11 @@ async def delete_file(
 
 
 def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*") -> str:
-    """Search file contents for a regular expression within a scope.
+    """Search file contents by regex within a scope (recursive).
 
-    Use to find where something is recorded (e.g. a past memory or decision).
+    Use to find where something is recorded (a past memory, a decision). One
+    well-chosen pattern usually locates it in a single call -- prefer that over
+    browsing directories with repeated list_dir calls.
 
     Args:
         pattern: Python regular expression to search for.
@@ -455,6 +483,9 @@ def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*")
 
 def find_files(glob_pattern: str, scope: str = "kb", path: str = "") -> str:
     """Find files and directories by name glob within a scope (recursive).
+
+    Use to locate files by name, or to see a subtree's layout, in one call
+    instead of repeated single-level list_dir calls.
 
     Args:
         glob_pattern: Glob to match against paths, e.g. ``*.md`` or ``**/*.py``.

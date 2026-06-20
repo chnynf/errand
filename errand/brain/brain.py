@@ -39,6 +39,7 @@ class Brain:
         *,
         agent_spec: AgentSpec | None = None,
         config: ErrandConfig | None = None,
+        tool_summary: str | None = None,
     ):
         set_debug(debug)
 
@@ -86,6 +87,7 @@ class Brain:
                 config.file_access if config is not None
                 else FileAccessConfig.from_dict(raw_config.get("file_access", {}))
             ),
+            tool_summary=tool_summary,
         )
 
     def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:

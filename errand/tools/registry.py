@@ -38,6 +38,23 @@ TOOLS_DIR = Path(__file__).resolve().parent
 
 _SKIP_MODULES = {"__init__", "registry"}
 
+# Cross-tool decisioning guidance, authored by the tools component and surfaced
+# as a dedicated block in the system prompt next to the file-tool scopes. These
+# are nudges that apply across tools (not to any single one), so they live here
+# rather than in individual tool descriptions or general runtime prose.
+TOOL_USE_GUIDANCE = (
+    "TOOL USE:\n"
+    "- Think before calling. Reach for a tool only when it adds information or "
+    "an effect you cannot produce yourself; otherwise reason and answer directly.\n"
+    "- Route, don't search, for the knowledge base. Resolve the path from the "
+    "inlined index and read_file it directly; use grep_files or list_dir only "
+    "when the index has no pointer — not to rediscover what it already maps.\n"
+    "- Batch independent work. When you need several independent things at once "
+    "(multiple files, or a read plus a search), issue them as parallel tool calls "
+    "in a single round; the runtime runs them concurrently. Sequence calls only "
+    "when a later one genuinely depends on an earlier result."
+)
+
 _PY_TO_JSON_TYPE: dict[str, str] = {
     "str": "string",
     "int": "integer",
@@ -198,6 +215,10 @@ class ToolRegistry:
     @property
     def names(self) -> list[str]:
         return list(self._tools.keys())
+
+    def tool_summary(self) -> str:
+        """Cross-tool decisioning guidance for the system prompt."""
+        return TOOL_USE_GUIDANCE
 
     def compact_result(
         self,

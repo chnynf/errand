@@ -86,7 +86,12 @@ class AgentLoop:
         self.delegation_depth = delegation_depth
         self.memory = Memory(session_id, agent_id=self.agent_id)
         self.tool_registry = ToolRegistry(can_delegate=self.agent_spec.can_delegate)
-        self.brain = Brain(debug=debug, agent_spec=self.agent_spec, config=self.config)
+        self.brain = Brain(
+            debug=debug,
+            agent_spec=self.agent_spec,
+            config=self.config,
+            tool_summary=self.tool_registry.tool_summary(),
+        )
 
     def add_session_note(self, note: str) -> None:
         self.memory.add_session_note(note)

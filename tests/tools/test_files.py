@@ -142,6 +142,20 @@ def test_list_dir_marks_dirs_and_hides_dotfiles(kb: Path):
     assert ".hidden" not in entries
 
 
+def test_list_dir_depth_one_is_single_level(kb: Path):
+    # Nested files are not shown at the default depth.
+    assert "a.md" not in ft.list_dir("", depth=1)
+
+
+def test_list_dir_recursive_depth_shows_indented_tree(kb: Path):
+    lines = ft.list_dir("", depth=2).splitlines()
+    assert "INDEX.md" in lines
+    assert "notes/" in lines
+    # nested file appears indented under its parent
+    assert any(line.strip() == "a.md" and line.startswith("  ") for line in lines)
+    assert ".hidden" not in "\n".join(lines)
+
+
 # --- append --------------------------------------------------------------------
 
 async def test_append_creates_file(kb: Path):
