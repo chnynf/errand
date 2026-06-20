@@ -33,6 +33,35 @@ from errand.tools.registry import ToolRegistry
 MAX_TOOL_ROUNDS = 8
 MAX_RESPONSE_RETRIES = 3
 
+# When a single turn's live context grows past this estimate (~chars/4), the
+# loop condenses everything gathered so far into a summary and continues as a
+# fresh internal segment -- same turn, same single reply to the interface.
+# Caching covers the cheap case; this only fires when one turn reads a lot.
+COMPACTION_TRIGGER_TOKENS = 20_000
+MAX_COMPACTIONS = 3
+
+# Orchestration instruction the loop injects to condense an oversized turn
+# before continuing (see _compact_segment). Like the other instruction strings
+# in this file, it drives the loop's control flow, so it lives with the loop.
+COMPACTION_INSTRUCTION = (
+    "Your working context for this turn has grown large and is about to be "
+    "condensed so you can keep going with a clean slate. Write a summary that "
+    "lets you continue WITHOUT the detailed tool history below.\n\n"
+    "Anchor everything to the user's original request (shown at the top of this "
+    "conversation). Keep only what is relevant to fulfilling it; drop tangential "
+    "detail.\n\n"
+    "Include, concisely:\n"
+    "1. Goal -- restate the user's request in one or two sentences.\n"
+    "2. Findings -- the concrete facts, file contents, search results, or data "
+    "gathered from tool calls so far that matter for the goal. Quote exact values "
+    "(paths, numbers, names) you will need.\n"
+    "3. Decisions -- anything you have already concluded or chosen.\n"
+    "4. Remaining -- what still needs to be done to finish the task.\n\n"
+    "Do not call any tools. Respond with the summary text only -- no preamble. The "
+    "detailed history is being discarded, so anything you omit is gone; capture "
+    "any detail you may need later, or note that it must be re-read."
+)
+
 # Tools a job is forbidden from calling while it is itself executing, so a
 # scheduled run can never (re)schedule and spin into an infinite loop.
 _SCHEDULED_RUN_BLOCKED_TOOLS = {"schedule_message", "cancel_scheduled_job"}
@@ -102,6 +131,7 @@ class AgentLoop:
                 t for t in tool_definitions if t.name not in _SCHEDULED_RUN_BLOCKED_TOOLS
             ]
         action_count = 0
+        compaction_count = 0
         force_respond = False
         hit_tool_cap = False
         suppress_usage_footer = bool(m.get("suppress_usage_footer"))
@@ -214,6 +244,42 @@ class AgentLoop:
                 messages.append(self._assistant_tool_message(tool_calls, decision.reasoning_content))
                 messages.extend(self._tool_result_messages(last_tool_results))
 
+                # Threshold-triggered compaction. Caching makes re-sending full
+                # tool content cheap, so we don't prune per round; only when one
+                # turn's live context grows large do we condense it into a
+                # summary and continue as a fresh internal segment. Takes
+                # precedence over the round cap while compactions remain.
+                est_tokens = len(json.dumps(messages, ensure_ascii=False, default=str)) // 4
+                if (
+                    not force_respond
+                    and compaction_count < MAX_COMPACTIONS
+                    and est_tokens >= COMPACTION_TRIGGER_TOKENS
+                ):
+                    await _progress(f"Condensing context... [{self.agent_id}]")
+                    summary = await self._compact_segment(messages, run_context, user_input)
+                    if summary:
+                        compaction_count += 1
+                        self.memory.set_context_summary(summary)
+                        debug_log(
+                            "Compaction",
+                            f"Segment {compaction_count}/{MAX_COMPACTIONS}: "
+                            f"condensed ~{est_tokens} tok of live context.",
+                            extra=f"agent={self.agent_id}",
+                        )
+                        messages = self.brain.build_messages(
+                            [{"role": "user", "content": user_input}],
+                            context_summary=summary,
+                            session_note=self.memory.data.get("metadata", {}).get("session_note"),
+                            instruction=(
+                                "The earlier tool history was condensed into the context "
+                                "summary above. Continue working toward the user's request; "
+                                "re-read or re-fetch any detail you still need."
+                            ),
+                        )
+                        action_count = 0
+                        next_log_extra = "post-compaction segment"
+                        continue
+
                 max_rounds = self.agent_spec.max_tool_rounds
                 if action_count >= max_rounds:
                     debug_log(
@@ -295,6 +361,28 @@ class AgentLoop:
         await self.memory.save_session()
 
         return final_response
+
+    async def _compact_segment(
+        self, messages: list[dict], run_context: RunContext, user_input: str
+    ) -> Optional[str]:
+        """Summarize the current live context so the turn can continue clean.
+
+        One forced-text model call (no tools). Returns the summary text, or
+        None if the call failed or produced nothing usable. The call's usage is
+        tracked, but it is never persisted as conversation history -- only the
+        resulting summary is kept, via ``set_context_summary``.
+        """
+        probe = messages + [{"role": "user", "content": COMPACTION_INSTRUCTION}]
+        out = await self.brain.decide(
+            probe,
+            tool_definitions=[],
+            session_id=self.memory.session_id,
+            log_extra="compaction",
+            usage_tracker=run_context.usage,
+        )
+        if out.get("error"):
+            return None
+        return (out["decision"].text_response or "").strip() or None
 
     @staticmethod
     def _summarize_tool_results(results: List[ToolResult]) -> str:
