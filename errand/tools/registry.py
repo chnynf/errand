@@ -58,7 +58,12 @@ TOOL_USE_GUIDANCE = (
 # arg validation). Every other tool is reached through the ``call_tool``
 # dispatcher and described only in the lightweight catalog, so the always-loaded
 # tool footprint stays small.
-_DEFAULT_NATIVE = ("read_file", "list_dir", "grep_files", "find_files")
+#
+# Only direct reads (read_file/list_dir) are hot-path. Search (grep_files,
+# find_files) is intentionally left in the catalog: routing it through
+# call_tool gives it the same friction as every other tool, so the model
+# reaches for the inlined index first instead of reflexively searching.
+_DEFAULT_NATIVE = ("read_file", "list_dir")
 
 _CALL_TOOL = "call_tool"
 _TOOL_MANUAL = "tool_manual"
