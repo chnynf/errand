@@ -30,7 +30,7 @@ import inspect
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from errand.contracts.types import ToolDefinition, ToolCall, ToolResult
 
@@ -55,12 +55,41 @@ TOOL_USE_GUIDANCE = (
     "when a later one genuinely depends on an earlier result."
 )
 
+# Hot-path tools kept as real native tool-calls (full schema + provider-side
+# arg validation). Every other tool is reached through the ``call_tool``
+# dispatcher and described only in the lightweight catalog, so the always-loaded
+# tool footprint stays small.
+_DEFAULT_NATIVE = ("read_file", "list_dir", "grep_files", "find_files")
+
+_CALL_TOOL = "call_tool"
+_TOOL_MANUAL = "tool_manual"
+
 _PY_TO_JSON_TYPE: dict[str, str] = {
     "str": "string",
     "int": "integer",
     "float": "number",
     "bool": "boolean",
 }
+
+# Accepted Python types per JSON-schema type, for harness-side arg validation.
+_JSON_TYPE_PY: dict[str, type | tuple[type, ...]] = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def _json_type_ok(value: Any, json_type: str) -> bool:
+    """Whether ``value`` matches a JSON-schema scalar type (bool is not int/number)."""
+    py = _JSON_TYPE_PY.get(json_type)
+    if py is None:
+        return True  # unconstrained type -> accept
+    if json_type in ("integer", "number") and isinstance(value, bool):
+        return False  # bool is an int subclass; don't accept it as a number
+    return isinstance(value, py)
 
 
 def _annotation_name(annotation: Any, default: str) -> str:
@@ -79,6 +108,7 @@ class ToolRegistry:
         self,
         tools_dir: Path | None = None,
         can_delegate: list[str] | None = None,
+        native_names: Iterable[str] | None = None,
     ):
         self._tools_dir = tools_dir or TOOLS_DIR
         self._tools: dict[str, Callable] = {}
@@ -87,6 +117,9 @@ class ToolRegistry:
         self._load()
         if can_delegate is not None:
             self._patch_delegation_description(can_delegate)
+        # Only natives that actually loaded count; the rest go to the catalog.
+        wanted = _DEFAULT_NATIVE if native_names is None else native_names
+        self._native = [n for n in wanted if n in self._tools]
 
     def _load(self) -> None:
         self._tools.clear()
@@ -134,36 +167,121 @@ class ToolRegistry:
                     desc["doc"] += "\n\nNo sub-agents are configured for delegation."
                 break
 
+    def _param_schema(self, name: str) -> dict[str, Any]:
+        """JSON-schema object for a tool's public parameters (type + required)."""
+        sig = inspect.signature(self._tools[name])
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for pname, param in sig.parameters.items():
+            if pname.startswith("_"):
+                continue
+            py_type = _annotation_name(param.annotation, "string")
+            properties[pname] = {"type": _PY_TO_JSON_TYPE.get(py_type, "string")}
+            if param.default is inspect.Parameter.empty:
+                required.append(pname)
+        return {"type": "object", "properties": properties, "required": required}
+
+    def _public_params(self, name: str) -> list[str]:
+        return [
+            p for p in inspect.signature(self._tools[name]).parameters
+            if not p.startswith("_")
+        ]
+
+    def validate_args(self, name: str, args: dict[str, Any]) -> str | None:
+        """Harness-side validation of a catalog call's args against the tool schema.
+
+        The provider only validates the ``call_tool`` envelope, so we check the
+        real tool's args ourselves: known tool, no missing required, no unknown
+        params, basic types. Returns an ``Error: ...`` string for the model to
+        self-correct on, or None if valid. Mirrors the provider-side check that
+        native tools get for free.
+        """
+        if name not in self._tools:
+            return f"Error: unknown tool '{name}'. Use a tool from the catalog."
+        if not isinstance(args, dict):
+            return f"Error: args for '{name}' must be an object."
+        schema = self._param_schema(name)
+        props, required = schema["properties"], schema["required"]
+
+        missing = [r for r in required if r not in args]
+        if missing:
+            return f"Error: {name} is missing required argument(s): {', '.join(missing)}."
+        unknown = [a for a in args if a not in props]
+        if unknown:
+            valid = ", ".join(props) or "(none)"
+            return f"Error: {name} got unknown argument(s): {', '.join(unknown)}. Valid: {valid}."
+        bad = [
+            f"'{p}' must be {props[p]['type']}"
+            for p, v in args.items()
+            if not _json_type_ok(v, props[p]["type"])
+        ]
+        if bad:
+            return f"Error: {name} argument type mismatch: {'; '.join(bad)}."
+        return None
+
     def get_tool_definitions(self) -> list[ToolDefinition]:
-        """Build native ToolDefinition list for LiteLLM."""
+        """Native tool defs for the hot-path tools, plus the two meta-tools.
+
+        Hot-path file tools keep full schemas (provider validates their args).
+        Every other tool is reached via ``call_tool`` and listed in the catalog
+        (``tool_summary``), keeping the always-loaded footprint small.
+        """
         definitions: list[ToolDefinition] = []
         for desc in self._descriptions:
-            func = self._tools[desc["name"]]
-            sig = inspect.signature(func)
-
-            properties: dict[str, Any] = {}
-            required: list[str] = []
-            for pname, param in sig.parameters.items():
-                if pname.startswith("_"):
-                    continue
-                annotation = param.annotation
-                py_type = _annotation_name(annotation, "string")
-                properties[pname] = {"type": _PY_TO_JSON_TYPE.get(py_type, "string")}
-                if param.default is inspect.Parameter.empty:
-                    required.append(pname)
-
+            if desc["name"] not in self._native:
+                continue
             definitions.append(
                 ToolDefinition(
                     name=desc["name"],
-                    description=desc["doc"],
-                    parameters={
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    },
+                    description=desc["doc"].split("\n", 1)[0].strip(),  # one-liner
+                    parameters=self._param_schema(desc["name"]),
                 )
             )
+        definitions.append(
+            ToolDefinition(
+                name=_CALL_TOOL,
+                description=(
+                    "Invoke a catalog tool. `name` is a tool from the catalog; "
+                    "`args` is its argument object."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "args": {"type": "object"}},
+                    "required": ["name", "args"],
+                },
+            )
+        )
+        definitions.append(
+            ToolDefinition(
+                name=_TOOL_MANUAL,
+                description="Return full usage docs for a catalog tool by name.",
+                parameters={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            )
+        )
         return definitions
+
+    def catalog(self) -> str:
+        """One ``name(params): purpose`` line per non-native tool."""
+        lines = []
+        for desc in self._descriptions:
+            name = desc["name"]
+            if name in self._native:
+                continue
+            params = ", ".join(self._public_params(name))
+            purpose = desc["doc"].split("\n", 1)[0].strip()
+            lines.append(f"{name}({params}): {purpose}")
+        return "\n".join(lines)
+
+    def manual(self, name: str) -> str:
+        """Full usage docs (signature + docstring) for one tool."""
+        for desc in self._descriptions:
+            if desc["name"] == name:
+                return f"{name}{desc['signature']}\n\n{desc['doc']}"
+        return f"Error: unknown tool '{name}'."
 
     async def execute(
         self,
@@ -171,7 +289,21 @@ class ToolRegistry:
         params: dict[str, Any],
         context: dict[str, Any] | None = None,
     ) -> Any:
-        """Execute a tool by name with the given parameters."""
+        """Execute a tool by name with the given parameters.
+
+        Handles the two meta-tools: ``tool_manual`` returns a tool's docs, and
+        ``call_tool`` dispatches to the named catalog tool.
+        """
+        if name == _TOOL_MANUAL:
+            return self.manual(str(params.get("name", "")))
+        if name == _CALL_TOOL:
+            inner = str(params.get("name", ""))
+            raw = params.get("args")
+            args = raw if isinstance(raw, dict) else {}
+            # execute is a trusting dispatcher: it never validates real-name calls
+            # either. Arg validation lives solely in validate_args, which callers
+            # (the agent loop) invoke as the single gate before dispatching here.
+            return await self.execute(inner, args, context)
         if name not in self._tools:
             raise ValueError(f"Tool '{name}' not found.")
         func = self._tools[name]
@@ -217,8 +349,21 @@ class ToolRegistry:
         return list(self._tools.keys())
 
     def tool_summary(self) -> str:
-        """Cross-tool decisioning guidance for the system prompt."""
-        return TOOL_USE_GUIDANCE
+        """Tool catalog + cross-tool guidance, for the system prompt.
+
+        The hot-path file tools are callable directly; every catalog tool below
+        is invoked via ``call_tool(name, args)``, with ``tool_manual(name)`` for
+        full usage.
+        """
+        return (
+            "TOOLS:\n"
+            "File read/search tools are callable directly. Every tool below is "
+            "invoked with call_tool(name, args); call tool_manual(name) first if "
+            "you are unsure how to use one.\n\n"
+            "CATALOG (name(args): purpose):\n"
+            f"{self.catalog()}\n\n"
+            f"{TOOL_USE_GUIDANCE}"
+        )
 
     def compact_result(
         self,

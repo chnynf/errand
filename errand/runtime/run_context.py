@@ -47,6 +47,12 @@ class UsageTracker:
 
     def __init__(self) -> None:
         self._by_agent: Dict[str, AgentUsage] = {}
+        # Retries the harness forced on the model, tracked separately from token
+        # usage as quality signals. Each hands an error back to the model, costing
+        # an extra round-trip: a validation catch (harness-side arg check rejected
+        # the call) or a tool error (the tool raised while executing).
+        self._validation_catches: int = 0
+        self._tool_errors: int = 0
 
     def record(self, usage: Dict[str, Any], *, agent_id: str) -> None:
         """Accumulate one successful API call's usage under ``agent_id``."""
@@ -99,6 +105,22 @@ class UsageTracker:
     def per_agent(self) -> Dict[str, AgentUsage]:
         return dict(self._by_agent)
 
+    def record_validation_catch(self) -> None:
+        """Count one harness-side validation rejection (a tool-call retry)."""
+        self._validation_catches += 1
+
+    @property
+    def validation_catches(self) -> int:
+        return self._validation_catches
+
+    def record_tool_error(self) -> None:
+        """Count one tool execution failure (a tool-call retry)."""
+        self._tool_errors += 1
+
+    @property
+    def tool_errors(self) -> int:
+        return self._tool_errors
+
     def render_footer(self) -> str:
         """Render the per-exchange usage footer (markdown, no leading rule).
 
@@ -117,6 +139,10 @@ class UsageTracker:
             f"*Models used: {models_str}*",
             f"*Tokens: {self.input_tokens} in{cache_str}, {self.output_tokens} out*",
         ]
+        if self._validation_catches:
+            lines.append(f"*Validation catches: {self._validation_catches}*")
+        if self._tool_errors:
+            lines.append(f"*Tool errors: {self._tool_errors}*")
         if len(self._by_agent) > 1:
             for agent_id, bucket in self._by_agent.items():
                 lines.append(

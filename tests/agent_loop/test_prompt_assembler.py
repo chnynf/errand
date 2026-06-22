@@ -4,7 +4,7 @@ We assert the structural shape (sections present, profile/scopes
 surfaced), not the exact wording of the static prompt fragments.
 """
 
-from errand.brain.prompt_assembler import PromptAssembler
+from errand.agent_loop.prompt_assembler import PromptAssembler
 from errand.config import FileAccessConfig, FileScope
 
 
@@ -14,7 +14,7 @@ def test_system_prompt_stable_no_current_context():
     # CURRENT CONTEXT must NOT be in the system prompt — it is time-varying
     # and would break prompt caching by changing the cached prefix every minute.
     assert "CURRENT CONTEXT:" not in prompt
-    assert "Errand Runtime" in prompt
+    assert "Errand Agent" in prompt
 
 
 def test_tool_summary_is_placed_verbatim_when_provided():

@@ -17,6 +17,7 @@ import json
 from dataclasses import asdict
 from typing import List, Optional
 
+from errand.agent_loop.prompt_assembler import PromptAssembler
 from errand.brain import Brain
 from errand.config import ErrandConfig, load_errand_config
 from errand.contracts.types import (
@@ -67,6 +68,19 @@ COMPACTION_INSTRUCTION = (
 _SCHEDULED_RUN_BLOCKED_TOOLS = {"schedule_message", "cancel_scheduled_job"}
 
 
+def _effective_call(tc: ToolCall) -> tuple[str, dict]:
+    """Resolve a tool call to its real (name, params).
+
+    Catalog tools arrive wrapped as ``call_tool(name, args)``; unwrap them so
+    history, compaction, logging, and the scheduled-run block all see the real
+    tool name. Native/meta tools pass through unchanged.
+    """
+    if tc.name == "call_tool" and isinstance(tc.params, dict):
+        args = tc.params.get("args")
+        return str(tc.params.get("name") or ""), args if isinstance(args, dict) else {}
+    return tc.name, tc.params
+
+
 class AgentLoop:
     """The think/act loop for one persisted session."""
 
@@ -86,12 +100,16 @@ class AgentLoop:
         self.delegation_depth = delegation_depth
         self.memory = Memory(session_id, agent_id=self.agent_id)
         self.tool_registry = ToolRegistry(can_delegate=self.agent_spec.can_delegate)
-        self.brain = Brain(
-            debug=debug,
-            agent_spec=self.agent_spec,
-            config=self.config,
+        # The loop is the running agent instance and the sole consumer of prompt
+        # assembly, so it owns the assembler. Brain just decides over messages.
+        self.prompt_assembler = PromptAssembler(
+            shared_soul=self.agent_spec.shared_soul or self.config.shared_soul,
+            agent_profile=self.agent_spec.agent_profile or self.config.agent_profile,
+            shared_notes_index=self.config.shared_notes_index,
+            file_access=self.config.file_access,
             tool_summary=self.tool_registry.tool_summary(),
         )
+        self.brain = Brain(debug=debug, agent_spec=self.agent_spec, config=self.config)
 
     def add_session_note(self, note: str) -> None:
         self.memory.add_session_note(note)
@@ -100,7 +118,7 @@ class AgentLoop:
         return self.memory.last_activity_at()
 
     def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
-        self.brain.reload_prompt_resources(soul=soul, profile=profile)
+        self.prompt_assembler.reload_resources(soul=soul, profile=profile)
 
     async def process_input(
         self, user_input: str, metadata: Optional[dict] = None
@@ -130,11 +148,9 @@ class AgentLoop:
 
         final_response = ""
 
+        # Blocked tools are no longer in the tool list (they live in the catalog,
+        # reached via call_tool), so enforcement moves to execution time below.
         tool_definitions = self.tool_registry.get_tool_definitions()
-        if is_scheduled or is_subagent:
-            tool_definitions = [
-                t for t in tool_definitions if t.name not in _SCHEDULED_RUN_BLOCKED_TOOLS
-            ]
         action_count = 0
         compaction_count = 0
         force_respond = False
@@ -145,7 +161,7 @@ class AgentLoop:
         last_tool_results: list[ToolResult] = []
         scheduled_messages: list[str] = []
         next_log_extra: Optional[str] = None
-        messages = self.brain.build_messages(
+        messages = self.prompt_assembler.build_messages(
             self.memory.build_history_messages(),
             context_summary=self.memory.data.get("context_summary"),
             session_note=self.memory.data.get("metadata", {}).get("session_note"),
@@ -204,16 +220,33 @@ class AgentLoop:
                     f"Round {action_count}/{MAX_TOOL_ROUNDS}: {tool_names}",
                     extra=f"agent={self.agent_id}",
                 )
+                eff = {tc.id: _effective_call(tc) for tc in tool_calls}
+
                 async def _run_tool(tc: ToolCall) -> ToolResult:
+                    eff_name, eff_params = eff[tc.id]
                     debug_log(
                         "Loop Execution",
-                        f"Executing tool: {tc.name}({tc.params})",
+                        f"Executing tool: {eff_name}({eff_params})",
                         extra=f"agent={self.agent_id}",
                     )
+                    if (is_scheduled or is_subagent) and eff_name in _SCHEDULED_RUN_BLOCKED_TOOLS:
+                        return ToolResult(
+                            tool_call_id=tc.id,
+                            name=eff_name,
+                            content=f"Tool '{eff_name}' is not available during a scheduled or delegated run.",
+                        )
+                    # Catalog tools (reached via call_tool) get harness-side arg
+                    # validation; the provider only checked the envelope. A catch
+                    # is recorded as a quality signal -- it forces a retry.
+                    if tc.name == "call_tool":
+                        verror = self.tool_registry.validate_args(eff_name, eff_params)
+                        if verror:
+                            run_context.usage.record_validation_catch()
+                            return ToolResult(tool_call_id=tc.id, name=eff_name, content=verror)
                     try:
                         result = await self.tool_registry.execute(
-                            tc.name,
-                            tc.params,
+                            eff_name,
+                            eff_params,
                             context={
                                 "agent_id": self.agent_id,
                                 "session_id": self.memory.session_id,
@@ -224,15 +257,19 @@ class AgentLoop:
                                 "run_context": run_context,
                             },
                         )
-                        return ToolResult(tool_call_id=tc.id, name=tc.name, content=str(result))
+                        return ToolResult(tool_call_id=tc.id, name=eff_name, content=str(result))
                     except Exception as e:
+                        # The tool raised; hand the error back as a result. Like a
+                        # validation catch, this forces the model to retry, so it's
+                        # tracked as a quality signal.
+                        run_context.usage.record_tool_error()
                         return ToolResult(
                             tool_call_id=tc.id,
-                            name=tc.name,
-                            content=f"Tool '{tc.name}' execution failed: {e}",
+                            name=eff_name,
+                            content=f"Tool '{eff_name}' execution failed: {e}",
                         )
 
-                round_tools_used.extend(tc.name for tc in tool_calls if tc.name)
+                round_tools_used.extend(eff[tc.id][0] for tc in tool_calls if eff[tc.id][0])
                 last_tool_results = await asyncio.gather(*(_run_tool(tc) for tc in tool_calls))
                 last_tool_results = list(last_tool_results)
                 for tr in last_tool_results:
@@ -240,7 +277,10 @@ class AgentLoop:
                         scheduled_messages.append(tr.content)
 
                 if last_tool_results:
-                    calls_by_id = {tc.id: tc for tc in tool_calls}
+                    calls_by_id = {
+                        tc.id: ToolCall(id=tc.id, name=eff[tc.id][0], params=eff[tc.id][1])
+                        for tc in tool_calls
+                    }
                     records = [
                         self.tool_registry.compact_result(calls_by_id.get(tr.tool_call_id), tr)
                         for tr in last_tool_results
@@ -271,7 +311,7 @@ class AgentLoop:
                             f"condensed ~{est_tokens} tok of live context.",
                             extra=f"agent={self.agent_id}",
                         )
-                        messages = self.brain.build_messages(
+                        messages = self.prompt_assembler.build_messages(
                             [{"role": "user", "content": user_input}],
                             context_summary=summary,
                             session_note=self.memory.data.get("metadata", {}).get("session_note"),

@@ -84,3 +84,15 @@ def test_root_factory_creates_fresh_tracker():
     assert ctx.reply_to == "rt"
     assert ctx.source == "discord"
     assert ctx.usage.input_tokens == 0
+
+
+def test_validation_catches_tracked_and_in_footer():
+    t = UsageTracker()
+    t.record(_usage(100, 10), agent_id="generalist")
+    assert t.validation_catches == 0
+    assert "Validation catches" not in t.render_footer()  # hidden when zero
+
+    t.record_validation_catch()
+    t.record_validation_catch()
+    assert t.validation_catches == 2
+    assert "*Validation catches: 2*" in t.render_footer()

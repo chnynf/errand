@@ -1,12 +1,14 @@
-"""Assemble system prompt and per-turn context messages for the model.
+"""Assemble the message list for one model call.
 
-The system prompt is intentionally small. It tells the agent:
+Lives in ``agent_loop``: the running agent (the loop) is the only consumer of
+prompt assembly, so it owns it. The brain just decides over the assembled
+messages. The system prompt is intentionally small. It tells the agent:
 - it is running inside Errand
-- the shared soul and configured agent profile resolved from runtime prompt includes
+- the shared soul and configured agent profile resolved from prompt includes
 - how to use scoped file tools and the response format Errand expects
 
-``runtime.md`` may contain host-side include placeholders. The model only
-sees the resolved prompt text, never the include directive.
+``agent.md`` may contain host-side include placeholders. The model only sees
+the resolved prompt text, never the include directive.
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ from zoneinfo import ZoneInfo
 
 from errand.config import FileAccessConfig
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+# The agent framing template is this component's own data; it lives next to the
+# loop that emits it, not a separate top-level prompts folder.
+_TEMPLATE_DIR = Path(__file__).resolve().parent
 SHARED_SOUL_INCLUDE = "{{ include:SHARED_SOUL }}"
 SHARED_NOTES_INDEX_INCLUDE = "{{ include:SHARED_NOTES_INDEX }}"
 AGENT_PROFILE_INCLUDE = "{{ include:AGENT_PROFILE }}"
@@ -52,7 +56,7 @@ class PromptAssembler:
         shared_notes_index: Optional[str] = None,
         tool_summary: Optional[str] = None,
     ):
-        self._runtime_template = self._load("runtime.md")
+        self._agent_template = self._load("agent.md")
         self._shared_soul = shared_soul
         self._shared_notes_index = shared_notes_index
         self._agent_profile = agent_profile
@@ -79,7 +83,7 @@ class PromptAssembler:
 
     @staticmethod
     def _load(filename: str) -> str:
-        path = PROMPTS_DIR / filename
+        path = _TEMPLATE_DIR / filename
         if not path.exists():
             raise FileNotFoundError(f"Prompt file not found: {path}")
         return path.read_text(encoding="utf-8").strip()
@@ -91,7 +95,7 @@ class PromptAssembler:
         and eligible for provider-level prompt caching (Gemini, DeepSeek, …).
         Per-turn context such as current time is injected in the user message.
         """
-        parts = [self._render_runtime()]
+        parts = [self._render_agent_template()]
 
         if self._tool_summary:
             parts.append(self._tool_summary)
@@ -116,6 +120,28 @@ class PromptAssembler:
         if instruction:
             parts.append(f"INSTRUCTION:\n{instruction}")
         return [{"role": "user", "content": "\n\n".join(parts)}]
+
+    def build_messages(
+        self,
+        history_messages: list[dict],
+        *,
+        context_summary: str | None = None,
+        session_note: str | None = None,
+        instruction: str | None = None,
+    ) -> list[dict]:
+        """Assemble the full message list for one model call.
+
+        system prompt (cached prefix) -> per-turn context -> conversation history.
+        """
+        return [
+            {"role": "system", "content": self.build_system_prompt()},
+            *self.build_context_messages(
+                context_summary=context_summary,
+                session_note=session_note,
+                instruction=instruction,
+            ),
+            *history_messages,
+        ]
 
     def _file_access_section(self) -> str:
         lines = [
@@ -143,18 +169,18 @@ class PromptAssembler:
                 lines.append(f"- FILE_SCOPE {name}: roots=[{roots}], ops=[{perm_str}]")
         return "\n".join(lines)
 
-    def _render_runtime(self) -> str:
+    def _render_agent_template(self) -> str:
         blocks = [
             ("_soul_block", "SHARED_SOUL", self._shared_soul, SHARED_SOUL_INCLUDE),
             ("_notes_block", "SHARED_NOTES_INDEX", self._shared_notes_index, SHARED_NOTES_INDEX_INCLUDE),
             ("_profile_block", "AGENT_PROFILE", self._agent_profile, AGENT_PROFILE_INCLUDE),
         ]
-        runtime = self._runtime_template
+        rendered = self._agent_template
         for attr, name, path, placeholder in blocks:
             if getattr(self, attr) is None:
                 setattr(self, attr, self._render_prompt_resource(name=name, resource_path=path, scope_hint="kb"))
-            runtime = runtime.replace(placeholder, getattr(self, attr))
-        return runtime
+            rendered = rendered.replace(placeholder, getattr(self, attr))
+        return rendered
 
     @staticmethod
     def _load_prompt_resource(resource_path: Optional[str]) -> Optional[str]:

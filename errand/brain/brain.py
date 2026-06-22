@@ -17,9 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
-from errand.brain.prompt_assembler import PromptAssembler
 from errand.brain.providers import ProviderRegistry
-from errand.config import AgentSpec, FileAccessConfig, ErrandConfig, load_raw_config
+from errand.config import AgentSpec, ErrandConfig, load_raw_config
 from errand.contracts.types import (
     BrainDecision,
     ToolDefinition,
@@ -39,78 +38,27 @@ class Brain:
         *,
         agent_spec: AgentSpec | None = None,
         config: ErrandConfig | None = None,
-        tool_summary: str | None = None,
     ):
         set_debug(debug)
 
-        raw_config = load_raw_config() if config is None else {
-            "models": config.models,
-            "model_strategy": config.model_strategy,
-            "retry": config.retry,
-            "shared_soul": config.shared_soul,
-            "shared_notes_index": config.shared_notes_index,
-            "agent_profile": config.agent_profile,
-            "file_access": {
-                "default_scope": config.file_access.default_scope,
-                "scopes": {
-                    name: {
-                        "roots": scope.roots,
-                        "read": scope.read,
-                        "list": scope.list,
-                    }
-                    for name, scope in config.file_access.scopes.items()
-                },
-            },
-        }
-        def from_spec(attr: str):
-            val = getattr(agent_spec, attr, None) if agent_spec else None
-            return raw_config.get(attr) if val is None else val
+        if config is None:
+            raw = load_raw_config()
+            models = raw.get("models", {})
+            default_strategy = raw.get("model_strategy", [])
+            retry = raw.get("retry", {})
+        else:
+            models, default_strategy, retry = config.models, config.model_strategy, config.retry
 
-        self.models_config = raw_config.get("models", {})
+        self.models_config = models
         self.agent_id = agent_spec.id if agent_spec else "default"
         spec_strategy = getattr(agent_spec, "model_strategy", None) if agent_spec else None
-        self.model_strategy: List[str] = (
-            list(spec_strategy) if spec_strategy else raw_config.get("model_strategy", [])
-        )
-        self.base_delay: int = raw_config.get("retry", {}).get("base_delay_seconds", 2)
+        self.model_strategy: List[str] = list(spec_strategy or default_strategy)
+        self.base_delay: int = (retry or {}).get("base_delay_seconds", 2)
 
         if not self.model_strategy:
             raise ValueError(
                 "model_strategy in config.json must contain at least one model."
             )
-
-        self.prompt_assembler = PromptAssembler(
-            shared_soul=from_spec("shared_soul"),
-            agent_profile=from_spec("agent_profile"),
-            shared_notes_index=raw_config.get("shared_notes_index"),
-            file_access=(
-                config.file_access if config is not None
-                else FileAccessConfig.from_dict(raw_config.get("file_access", {}))
-            ),
-            tool_summary=tool_summary,
-        )
-
-    def reload_prompt_resources(self, *, soul: bool = True, profile: bool = True) -> None:
-        self.prompt_assembler.reload_resources(soul=soul, profile=profile)
-
-    def build_messages(
-        self,
-        history_messages: list[dict],
-        *,
-        context_summary: str | None = None,
-        session_note: str | None = None,
-        instruction: str | None = None,
-    ) -> list[dict]:
-        """Build the full message list for one model call."""
-        return [
-            {"role": "system", "content": self.prompt_assembler.build_system_prompt()},
-            *self.prompt_assembler.build_context_messages(
-                context_summary=context_summary,
-                session_note=session_note,
-                instruction=instruction,
-            ),
-            *history_messages,
-        ]
 
     def _resolve_model(
         self, model_key: str

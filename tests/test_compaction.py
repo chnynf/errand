@@ -40,16 +40,18 @@ class _FakeRegistry:
         }
 
 
+class _FakePromptAssembler:
+    def build_messages(self, history, *, context_summary=None, session_note=None, instruction=None):
+        return [{"role": "system", "content": "sys"},
+                {"role": "user", "content": f"CTX:{context_summary}"}, *history]
+
+
 class _FakeBrain:
     """Scripts the loop: read -> (compaction) -> final text."""
 
     def __init__(self):
         self.compaction_calls = 0
         self.main_step = 0
-
-    def build_messages(self, history, *, context_summary=None, session_note=None, instruction=None):
-        return [{"role": "system", "content": "sys"},
-                {"role": "user", "content": f"CTX:{context_summary}"}, *history]
 
     async def decide(self, messages, tool_definitions=None, session_id=None,
                      log_extra=None, usage_tracker=None, **kw):
@@ -77,6 +79,7 @@ def _make_loop(monkeypatch, tmp_path, payload):
     loop.delegation_depth = 0
     loop.memory = Memory("compaction-session", agent_id="test")
     loop.tool_registry = _FakeRegistry(payload)
+    loop.prompt_assembler = _FakePromptAssembler()
     loop.brain = _FakeBrain()
     return loop
 

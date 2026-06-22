@@ -85,18 +85,53 @@ def test_skips_private_modules(tools_dir: Path):
 
 
 def test_get_tool_definitions_schema(tools_dir: Path):
-    registry = ToolRegistry(tools_dir=tools_dir)
+    # Native tools get a full def (schema + one-line description).
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["add", "whoami"])
     defs = {d.name: d for d in registry.get_tool_definitions()}
 
     add_def = defs["add"]
     assert add_def.parameters["properties"]["a"]["type"] == "integer"
     assert add_def.parameters["properties"]["b"]["type"] == "integer"
     assert add_def.parameters["required"] == ["a"]
-    assert add_def.description.startswith("Add two numbers.")
+    assert add_def.description == "Add two numbers."  # one-liner, not full doc
 
     whoami_def = defs["whoami"]
     assert "_context" not in whoami_def.parameters["properties"]
     assert whoami_def.parameters["required"] == []
+
+
+def test_hybrid_splits_native_defs_from_catalog(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["add"])
+    names = {d.name for d in registry.get_tool_definitions()}
+    # native tool + the two meta-tools are real defs; catalog tools are not
+    assert "add" in names
+    assert {"call_tool", "tool_manual"} <= names
+    assert "greet" not in names and "whoami" not in names
+
+    catalog = registry.catalog()
+    assert "greet(name): Greet a person by name." in catalog
+    assert "add(" not in catalog  # native tools stay out of the catalog
+
+
+def test_call_tool_dispatches_to_inner_tool(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["add"])
+    out = asyncio.run(registry.execute("call_tool", {"name": "greet", "args": {"name": "Bo"}}))
+    assert out == "hi Bo"
+
+
+def test_tool_manual_returns_full_docs(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["add"])
+    manual = asyncio.run(registry.execute("tool_manual", {"name": "add"}))
+    assert manual.startswith("add(")          # signature included
+    assert "Add two numbers." in manual
+    assert "simple arithmetic" in manual       # full docstring, not just first line
+
+
+def test_tool_summary_lists_catalog_and_nudges(tools_dir: Path):
+    summary = ToolRegistry(tools_dir=tools_dir, native_names=["add"]).tool_summary()
+    assert "CATALOG" in summary
+    assert "greet(name): Greet a person by name." in summary
+    assert "Think before calling" in summary
 
 
 def test_execute_sync_and_async_tools(tools_dir: Path):
@@ -214,3 +249,39 @@ def test_tool_summary_carries_cross_tool_nudges():
     assert "Think before calling" in summary
     assert "Route, don't search" in summary
     assert "Batch independent work" in summary
+
+
+# validate_args is the single validation gate; the agent loop invokes it before
+# dispatching a catalog call. execute itself is a trusting dispatcher.
+def test_validate_args_missing_required(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    out = registry.validate_args("add", {})
+    assert out.startswith("Error:") and "missing required" in out and "a" in out
+
+
+def test_validate_args_unknown_arg(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    out = registry.validate_args("add", {"a": 1, "z": 9})
+    assert out.startswith("Error:") and "unknown argument" in out and "z" in out
+
+
+def test_validate_args_type(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    out = registry.validate_args("add", {"a": "two"})
+    assert out.startswith("Error:") and "type mismatch" in out and "integer" in out
+
+
+def test_validate_args_unknown_tool(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    out = registry.validate_args("nope", {})
+    assert out.startswith("Error:") and "unknown tool" in out
+
+
+def test_validate_args_valid_returns_none(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    assert registry.validate_args("add", {"a": 2, "b": 3}) is None
+
+
+def test_call_tool_dispatches_without_validating(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    assert asyncio.run(registry.execute("call_tool", {"name": "add", "args": {"a": 2, "b": 3}})) == 5

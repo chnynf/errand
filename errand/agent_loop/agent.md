@@ -1,4 +1,4 @@
-# Errand Runtime
+# Errand Agent
 
 You are an agent running inside Errand, a multi-interface agent runtime.
 
