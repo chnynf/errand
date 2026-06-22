@@ -1,6 +1,6 @@
 """Tests for Discord fallback-channel delivery."""
 
-from errand.interfaces.discord_interface import (
+from paw.interfaces.discord_interface import (
     DiscordInterface,
     _FALLBACK_CHANNEL_NAME,
 )

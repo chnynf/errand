@@ -3,9 +3,9 @@ run's usage tracker and surfaced in the footer."""
 
 from dataclasses import dataclass
 
-from errand.agent_loop.loop import AgentLoop
-from errand.contracts.types import BrainDecision, ToolCall, ToolDefinition
-from errand.sessions.memory import Memory
+from paw.agent_loop.loop import AgentLoop
+from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
+from paw.sessions.memory import Memory
 
 
 @dataclass
@@ -59,7 +59,7 @@ class _Brain:
 
 
 def _make_loop(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     loop = object.__new__(AgentLoop)
     loop.debug = False
     loop.agent_id = "test"

@@ -1,7 +1,7 @@
 """Tests for `ToolRegistry`.
 
 Uses a temporary tools dir so tests are independent of which Python
-tools currently ship in ``errand/tools/``.
+tools currently ship in ``paw/tools/``.
 """
 
 import asyncio
@@ -10,9 +10,9 @@ from textwrap import dedent
 
 import pytest
 
-from errand.contracts.types import ToolCall, ToolResult
-from errand.sessions.memory import Memory
-from errand.tools.registry import ToolRegistry
+from paw.contracts.types import ToolCall, ToolResult
+from paw.sessions.memory import Memory
+from paw.tools.registry import ToolRegistry
 
 
 @pytest.fixture
@@ -174,7 +174,7 @@ def test_compact_result_default_compactor_truncates_long_content(tools_dir: Path
 
 
 def test_compact_result_uses_registered_compactor_for_file_tools():
-    # Uses the real errand/tools/ directory so the files.py COMPACTORS register.
+    # Uses the real paw/tools/ directory so the files.py COMPACTORS register.
     registry = ToolRegistry()
     call = ToolCall(
         id="tc-1",

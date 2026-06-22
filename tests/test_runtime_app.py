@@ -3,10 +3,10 @@ import contextlib
 
 import uvicorn
 
-from errand.interfaces.web.interface import WebInterface
-from errand.contracts.interfaces import UserMessage
-from errand.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT
-from errand.runtime.app import ErrandApp
+from paw.interfaces.web.interface import WebInterface
+from paw.contracts.interfaces import UserMessage
+from paw.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT
+from paw.runtime.app import PawApp
 
 
 class _SessionManager:
@@ -53,7 +53,7 @@ async def test_app_stop_lets_interfaces_exit_before_cancelling_tasks() -> None:
     task = asyncio.create_task(interface.start())
     await asyncio.sleep(0)
 
-    app = object.__new__(ErrandApp)
+    app = object.__new__(PawApp)
     app._interfaces = [interface]
     app._tasks = [task]
     app._scheduler = None
@@ -122,7 +122,7 @@ async def test_reset_command_archives_current_session() -> None:
 
     reply = _Reply()
     manager = Manager()
-    app = object.__new__(ErrandApp)
+    app = object.__new__(PawApp)
     app.session_manager = manager
     app.config = type("Config", (), {"default_agent": "generalist"})()
 
@@ -165,8 +165,8 @@ class _FallbackInterface:
         return self._fallback_result
 
 
-def _app_with_interfaces(interfaces) -> ErrandApp:
-    app = object.__new__(ErrandApp)
+def _app_with_interfaces(interfaces) -> PawApp:
+    app = object.__new__(PawApp)
     app._interfaces = interfaces
     return app
 
@@ -255,7 +255,7 @@ async def test_reload_command_reloads_cached_prompts() -> None:
 
     reply = _Reply()
     manager = Manager()
-    app = object.__new__(ErrandApp)
+    app = object.__new__(PawApp)
     app.session_manager = manager
     app.config = type("Config", (), {"default_agent": "generalist"})()
 

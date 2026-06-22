@@ -1,13 +1,13 @@
 import time
 
-from errand.config import AgentSpec, ErrandConfig, SessionConfig
-from errand.sessions.manager import SessionManager
-from errand.sessions.memory import IDLE_BOUNDARY_NOTE
+from paw.config import AgentSpec, PawConfig, SessionConfig
+from paw.sessions.manager import SessionManager
+from paw.sessions.memory import IDLE_BOUNDARY_NOTE
 
 
 def test_idle_boundary_marks_next_turn_context(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
-    config = ErrandConfig(
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    config = PawConfig(
         model_strategy=["dummy"],
         sessions=SessionConfig(idle_boundary_hours=1),
         agents={

@@ -5,7 +5,7 @@ agent and any sub-agents, with a per-agent breakdown, so delegated work no
 longer hides in a separate per-session total.
 """
 
-from errand.runtime.run_context import RunContext, UsageTracker
+from paw.runtime.run_context import RunContext, UsageTracker
 
 GEMINI_PRICING = {"input": 0.30, "output": 2.50, "cache_read": 0.075}
 
@@ -61,7 +61,7 @@ def test_footer_shows_breakdown_only_when_multiple_agents():
 
 def test_cache_creation_tokens_counted_without_cost():
     """Anthropic-style cache-write tokens are still COUNTED (model-agnostic),
-    even though Errand no longer prices them."""
+    even though Paw no longer prices them."""
     t = UsageTracker()
     t.record(
         {

@@ -2,13 +2,13 @@
 
 from dataclasses import dataclass
 
-from errand.agent_loop.loop import (
+from paw.agent_loop.loop import (
     AgentLoop,
     COMPACTION_INSTRUCTION,
     COMPACTION_TRIGGER_TOKENS,
 )
-from errand.contracts.types import BrainDecision, ToolCall, ToolDefinition
-from errand.sessions.memory import Memory
+from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
+from paw.sessions.memory import Memory
 
 
 @dataclass
@@ -71,7 +71,7 @@ class _FakeBrain:
 
 
 def _make_loop(monkeypatch, tmp_path, payload):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     loop = object.__new__(AgentLoop)
     loop.debug = False
     loop.agent_id = "test"

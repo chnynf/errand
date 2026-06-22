@@ -12,16 +12,16 @@ env/
 .venv/
 
 # Runtime state
-errand/sessions/_data/
-errand/interfaces/discord_session_mapping.json
-errand/interfaces/wechat_creds.json
-errand/interfaces/wechat_state.json
-errand/interfaces/wechat_qr.png
-errand/scheduler/jobs.json
+paw/sessions/_data/
+paw/interfaces/discord_session_mapping.json
+paw/interfaces/wechat_creds.json
+paw/interfaces/wechat_state.json
+paw/interfaces/wechat_qr.png
+paw/scheduler/jobs.json
 
 # Personal config — copy config.example.json → config.json to get started
 config.json
-errand/contacts.md
+paw/contacts.md
 
 # IDE
 .DS_Store

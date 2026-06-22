@@ -4,8 +4,8 @@ import sys
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-from errand.config import AgentSpec, ExternalAgentSpec
-from errand.tools import external_agents
+from paw.config import AgentSpec, ExternalAgentSpec
+from paw.tools import external_agents
 
 
 @dataclass
@@ -49,7 +49,7 @@ async def test_invoke_external_agent_argument_mode(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(external_agents, "load_errand_config", lambda: config)
+    monkeypatch.setattr(external_agents, "load_paw_config", lambda: config)
 
     result = await external_agents.invoke_external_agent(
         "echoer",
@@ -73,7 +73,7 @@ async def test_invoke_external_agent_does_not_request_launch_approval(monkeypatc
             )
         },
     )
-    monkeypatch.setattr(external_agents, "load_errand_config", lambda: config)
+    monkeypatch.setattr(external_agents, "load_paw_config", lambda: config)
     reply_to = FakeReplyTarget(approved=False)
 
     result = await external_agents.invoke_external_agent(
@@ -125,7 +125,7 @@ async def test_invoke_external_agent_stream_json_permission(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(external_agents, "load_errand_config", lambda: config)
+    monkeypatch.setattr(external_agents, "load_paw_config", lambda: config)
     reply_to = FakeReplyTarget(approved=True)
 
     result = await external_agents.invoke_external_agent(
@@ -148,7 +148,7 @@ async def test_invoke_external_agent_rejects_disallowed_delegate(monkeypatch):
             )
         },
     )
-    monkeypatch.setattr(external_agents, "load_errand_config", lambda: config)
+    monkeypatch.setattr(external_agents, "load_paw_config", lambda: config)
 
     result = await external_agents.invoke_external_agent(
         "echoer",

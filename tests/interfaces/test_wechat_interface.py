@@ -1,6 +1,6 @@
 import asyncio
 
-from errand.interfaces.wechat_interface import (
+from paw.interfaces.wechat_interface import (
     WeChatInterface,
     _ITEM_TYPE_TEXT,
     _MSG_TYPE_USER,

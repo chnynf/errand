@@ -1,4 +1,4 @@
-"""Tests for the scoped file-system tools in ``errand.tools.files``.
+"""Tests for the scoped file-system tools in ``paw.tools.files``.
 
 Covers scope/permission enforcement, every file operation, the per-operation
 approval policy, and session-memory compaction of large write payloads.
@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from errand.config import ErrandConfig, FileAccessConfig, FileScope
-from errand.contracts.types import ToolCall, ToolResult
-from errand.tools.registry import ToolRegistry
-from errand.tools import files as ft
+from paw.config import PawConfig, FileAccessConfig, FileScope
+from paw.contracts.types import ToolCall, ToolResult
+from paw.tools.registry import ToolRegistry
+from paw.tools import files as ft
 
 
 def _patch_scope(monkeypatch, root: Path, **scope_kwargs) -> None:
@@ -26,13 +26,13 @@ def _patch_scope(monkeypatch, root: Path, **scope_kwargs) -> None:
     scope_kwargs.setdefault("append", True)
     scope_kwargs.setdefault("edit",   True)
     scope_kwargs.setdefault("delete", True)
-    config = ErrandConfig(
+    config = PawConfig(
         file_access=FileAccessConfig(
             default_scope="kb",
             scopes={"kb": FileScope(roots=[str(root)], **scope_kwargs)},
         )
     )
-    monkeypatch.setattr(ft, "load_errand_config", lambda: config)
+    monkeypatch.setattr(ft, "load_paw_config", lambda: config)
 
 
 @pytest.fixture

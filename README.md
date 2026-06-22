@@ -1,6 +1,6 @@
-# Errand Agent
+# Paw Agent
 
-## Why Errand?
+## Why Paw?
 
 It's an AI assistant you can reach from your phone, terminal, or browser, running tools you wrote yourself, with memory across conversations. The whole runtime is under 2,000 lines of Python so it stays lightweight and readable end to end. Feel free to contribute if you share the same interest.
 
@@ -9,7 +9,7 @@ It's an AI assistant you can reach from your phone, terminal, or browser, runnin
 A personal agent runtime with:
 
 - LiteLLM-backed model routing
-- native tool calling from Python tools in `errand/tools/`
+- native tool calling from Python tools in `paw/tools/`
 - scoped file read/write/search (`read_file`, `list_dir`, `grep_files`, `find_files`, `write_file`, `edit_file`, `delete_file`)
 - Discord, WeChat (iLink ClawBot), CLI, scheduler, and per-session memory
 
@@ -60,30 +60,30 @@ Ensure your virtual environment is activated before running these commands.
 Starts the interfaces enabled in `config.json`:
 
 ```bash
-python -m errand --debug
+python -m paw --debug
 ```
 
 ### CLI Only
 
 ```bash
-python -m errand --debug --interface cli
+python -m paw --debug --interface cli
 ```
 
 ### Discord Only
 
 ```bash
-python -m errand --debug --interface discord
+python -m paw --debug --interface discord
 ```
 
 If your network requires an HTTP(S) proxy for Discord:
 
 ```bash
-HTTPS_PROXY=http://host:port HTTP_PROXY=http://host:port python -m errand --debug
+HTTPS_PROXY=http://host:port HTTP_PROXY=http://host:port python -m paw --debug
 ```
 
 ### WeChat (iLink ClawBot)
 
-Errand connects to WeChat via Tencent's official iLink Bot API — no public IP or
+Paw connects to WeChat via Tencent's official iLink Bot API — no public IP or
 webhook required. All connections are outbound long-poll to `ilinkai.weixin.qq.com`.
 
 **Prerequisites**: iOS WeChat 8.0.70+ or latest Android. Enable the ClawBot plugin:
@@ -92,12 +92,12 @@ WeChat → Me → Settings → Plugins → ClawBot.
 **First run** (one-time login):
 
 ```bash
-python -m errand --interface wechat
+python -m paw --interface wechat
 ```
 
 A browser window opens with a QR code. Scan it in WeChat → ClawBot plugin → confirm.
-Credentials are saved to `errand/interfaces/wechat_creds.json` (git-ignored).
-Subsequent starts reuse the saved token automatically; if the token expires errand
+Credentials are saved to `paw/interfaces/wechat_creds.json` (git-ignored).
+Subsequent starts reuse the saved token automatically; if the token expires paw
 re-opens the browser for a fresh scan.
 
 **Enable in config.json**:
@@ -116,7 +116,7 @@ owner can send messages to the bot. It cannot be added as a contact by other use
 
 ## Knowledge Base (KB) Quickstart
 
-Errand reads its agent personality and domain knowledge from plain Markdown files
+Paw reads its agent personality and domain knowledge from plain Markdown files
 outside this repo — your **Knowledge Base (KB)**. This keeps your personal
 instructions and context separate from the runtime code.
 
@@ -142,7 +142,7 @@ agent loads them on demand via `read_file` / `list_dir`.
 
 ## Agent Profile and File Access
 
-`config.json` points each Errand instance at one active agent profile:
+`config.json` points each Paw instance at one active agent profile:
 
 ```json
 "shared_soul": "~/my-kb/SOUL.md",
@@ -200,7 +200,7 @@ The model selects a scope by name when calling the file tools (`read_file`,
 or to record durable notes/memories. Roots and permissions are owned by config;
 the model cannot expand them.
 
-Runtime tool schemas are the source of truth for directly callable Errand tools.
+Runtime tool schemas are the source of truth for directly callable Paw tools.
 KB skills may mention CLIs, APIs, MCP tools, or external services; those are
 execution surfaces, not guaranteed runtime tools. Use them only when the current
 runtime exposes the tool or the command/service is available in the environment.
@@ -208,18 +208,18 @@ runtime exposes the tool or the command/service is available in the environment.
 Temporary overrides:
 
 ```bash
-ERRAND_SHARED_SOUL=~/my-kb/SOUL.md \
-ERRAND_AGENT_PROFILE=~/my-kb/generalist/INDEX.md \
-ERRAND_KNOWLEDGE_ROOTS=~/my-kb \
-python -m errand --debug
+PAW_SHARED_SOUL=~/my-kb/SOUL.md \
+PAW_AGENT_PROFILE=~/my-kb/generalist/INDEX.md \
+PAW_KNOWLEDGE_ROOTS=~/my-kb \
+python -m paw --debug
 ```
 
-`ERRAND_KNOWLEDGE_ROOTS` uses the OS path separator (`:` on macOS/Linux) and
+`PAW_KNOWLEDGE_ROOTS` uses the OS path separator (`:` on macOS/Linux) and
 maps into the `kb` scope.
 
 ## Session Memory Model
 
-Errand separates memory into four horizons. Keep these distinct when changing
+Paw separates memory into four horizons. Keep these distinct when changing
 the loop, tools, or prompt assembly.
 
 ### 1. Audit Log
@@ -311,27 +311,27 @@ flowchart TD
 
 | Component | Folder | Main API | Input | Output | Owns |
 | --- | --- | --- | --- | --- | --- |
-| Runtime | `errand/runtime/` | `ErrandApp.start()`, `stop()`, `handle_user_message()` | Config, enabled interfaces, normalized user messages | Started services, final replies | Process lifecycle and component wiring |
-| Interfaces | `errand/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
-| Sessions | `errand/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
-| Agent Loop | `errand/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
-| Brain | `errand/brain/` | `Brain.build_messages(...)`, `Brain.decide(...)` | Role-tagged messages, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
-| Tools | `errand/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
-| Scheduler | `errand/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
-| Config | `errand/config/` | `load_raw_config()`, `load_errand_config()` | `config.json`, env overrides | `ErrandConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
-| Contracts | `errand/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |
-| Prompts | `errand/prompts/` | Read by `PromptAssembler` | Runtime prompt file | System prompt fragment | Harness-level instructions only |
+| Runtime | `paw/runtime/` | `PawApp.start()`, `stop()`, `handle_user_message()` | Config, enabled interfaces, normalized user messages | Started services, final replies | Process lifecycle and component wiring |
+| Interfaces | `paw/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
+| Sessions | `paw/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
+| Agent Loop | `paw/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
+| Brain | `paw/brain/` | `Brain.build_messages(...)`, `Brain.decide(...)` | Role-tagged messages, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
+| Tools | `paw/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
+| Scheduler | `paw/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
+| Config | `paw/config/` | `load_raw_config()`, `load_paw_config()` | `config.json`, env overrides | `PawConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
+| Contracts | `paw/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |
+| Prompts | `paw/prompts/` | Read by `PromptAssembler` | Runtime prompt file | System prompt fragment | Harness-level instructions only |
 
-External knowledge is not an Errand component. The KB lives wherever you point
-`file_access.scopes.kb.roots` in `config.json` and is exposed to Errand through the `kb` file scope.
+External knowledge is not an Paw component. The KB lives wherever you point
+`file_access.scopes.kb.roots` in `config.json` and is exposed to Paw through the `kb` file scope.
 
 ### Runtime state
 
-- `errand/sessions/_data/` — per-session JSON history (git-ignored)
-- `errand/scheduler/jobs.json` — scheduled jobs (git-ignored)
-- `errand/interfaces/discord_session_mapping.json` — Discord channel mappings (git-ignored)
-- `errand/interfaces/wechat_creds.json` — WeChat bot token (git-ignored)
-- `errand/interfaces/wechat_state.json` — WeChat message cursor (git-ignored)
+- `paw/sessions/_data/` — per-session JSON history (git-ignored)
+- `paw/scheduler/jobs.json` — scheduled jobs (git-ignored)
+- `paw/interfaces/discord_session_mapping.json` — Discord channel mappings (git-ignored)
+- `paw/interfaces/wechat_creds.json` — WeChat bot token (git-ignored)
+- `paw/interfaces/wechat_state.json` — WeChat message cursor (git-ignored)
 
 ### Test Boundaries
 

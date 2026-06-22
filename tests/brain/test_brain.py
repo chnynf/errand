@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from errand.brain import Brain
-from errand.contracts.types import ToolDefinition
+from paw.brain import Brain
+from paw.contracts.types import ToolDefinition
 
 
 def _mk_response(*, content=None, tool_calls=None):
@@ -115,9 +115,9 @@ async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
 
     mock_acompletion = AsyncMock(side_effect=[rate_limit, success_response])
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("paw.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.decide(
             messages=[{"role": "system", "content": "soul"}, {"role": "user", "content": "hi"}],
             tool_definitions=[tool_def],
@@ -148,7 +148,7 @@ async def test_decide_records_usage_into_tracker_under_agent_id(brain):
     """
     from litellm.exceptions import RateLimitError
 
-    from errand.runtime.run_context import UsageTracker
+    from paw.runtime.run_context import UsageTracker
 
     brain.agent_id = "notes-organizer"
     tracker = UsageTracker()
@@ -159,9 +159,9 @@ async def test_decide_records_usage_into_tracker_under_agent_id(brain):
     success_response = _mk_response(content="ok\n---\nContext: cs")
     mock_acompletion = AsyncMock(side_effect=[rate_limit, success_response])
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("paw.brain.brain.asyncio.sleep", new=AsyncMock()):
         await brain.decide(
             messages=[{"role": "user", "content": "hi"}],
             usage_tracker=tracker,
@@ -193,9 +193,9 @@ async def test_decide_can_resume_after_failed_model_key(brain):
 
     mock_acompletion = AsyncMock(return_value=final_response)
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("paw.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.decide(
             messages=messages,
             tool_definitions=[tool_def],
@@ -241,9 +241,9 @@ async def test_decide_start_after_failed_model_not_provider(brain):
 
     mock_acompletion = AsyncMock(return_value=final_response)
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=mock_acompletion,
-    ), patch("errand.brain.brain.asyncio.sleep", new=AsyncMock()):
+    ), patch("paw.brain.brain.asyncio.sleep", new=AsyncMock()):
         result = await brain.decide(
             messages=[
                 {"role": "system", "content": "soul"},

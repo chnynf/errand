@@ -1,11 +1,11 @@
-from errand.contracts.types import ToolCall, ToolResult
-from errand.sessions.memory import (
+from paw.contracts.types import ToolCall, ToolResult
+from paw.sessions.memory import (
     IDLE_BOUNDARY_NOTE,
     Memory,
     _safe_stem,
     strip_tool_call_signature,
 )
-from errand.tools.registry import ToolRegistry
+from paw.tools.registry import ToolRegistry
 
 # A Gemini-style id with a thought signature smuggled in by LiteLLM.
 _THOUGHT_ID = "call_82d77cbf__thought__EoCaAQr8mQEBDDnWxxktVVmd" * 4
@@ -15,7 +15,7 @@ def test_history_messages_use_roles_without_persisted_file_contents(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
 
     memory.add_history("user", "Read the profile.")
@@ -81,7 +81,7 @@ def test_strip_tool_call_signature():
 
 
 def test_thought_signature_stripped_on_persist_and_replay(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("sig-session")
 
     memory.add_history("user", "What's for dinner?")
@@ -117,7 +117,7 @@ def test_thought_signature_stripped_on_persist_and_replay(monkeypatch, tmp_path)
 
 def test_legacy_session_with_blob_ids_is_stripped_on_read(monkeypatch, tmp_path):
     # Simulate a session persisted before the fix: full blob ids on disk.
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("legacy-session")
     memory.data["history"] = [
         {"role": "user", "content": "hi", "metadata": {}},
@@ -142,7 +142,7 @@ def test_legacy_session_with_blob_ids_is_stripped_on_read(monkeypatch, tmp_path)
 
 
 def test_scheduled_history_renders_as_user_message(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
     memory.add_history("scheduled", "A scheduled task is firing now.\nTASK: water plants")
 
@@ -157,7 +157,7 @@ def test_scheduled_history_renders_as_user_message(monkeypatch, tmp_path):
 
 
 def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
 
     memory.add_session_note(IDLE_BOUNDARY_NOTE)
@@ -167,7 +167,7 @@ def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
 
 
 def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     session_id = "wechat:o9cq80wyNyZ@im.wechat"
     memory = Memory(session_id)
     assert ":" not in memory._file_stem
@@ -175,7 +175,7 @@ def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_p
 
 
 async def test_archive_session_with_illegal_chars(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("wechat:o9cq80wyNyZ@im.wechat")
     memory.add_history("user", "hi")
     await memory.save_session()
@@ -193,7 +193,7 @@ def test_safe_stem_replaces_windows_illegal_chars():
 
 
 def test_update_token_usage_accumulates_counts(monkeypatch, tmp_path):
-    monkeypatch.setattr("errand.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("count-session")
 
     memory.update_token_usage(

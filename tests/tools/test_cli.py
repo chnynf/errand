@@ -2,7 +2,7 @@
 
 import sys
 
-from errand.tools.cli import run_cli
+from paw.tools.cli import run_cli
 
 
 class FakeReplyTarget:

@@ -1,9 +1,9 @@
-"""Tests for internal Errand delegation tool."""
+"""Tests for internal Paw delegation tool."""
 
 from dataclasses import dataclass, field
 
-from errand.config import AgentSpec
-from errand.tools import delegation
+from paw.config import AgentSpec
+from paw.tools import delegation
 
 
 @dataclass
@@ -21,7 +21,7 @@ async def test_invoke_agent_rejects_disallowed_delegate(monkeypatch):
             "applied-scientist": AgentSpec(id="applied-scientist"),
         }
     )
-    monkeypatch.setattr(delegation, "load_errand_config", lambda: config)
+    monkeypatch.setattr(delegation, "load_paw_config", lambda: config)
 
     result = await delegation.invoke_agent(
         "applied-scientist",

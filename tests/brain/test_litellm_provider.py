@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from errand.brain.providers.litellm import LiteLLMProvider
-from errand.contracts.types import ToolDefinition
+from paw.brain.providers.litellm import LiteLLMProvider
+from paw.contracts.types import ToolDefinition
 
 
 def _mk_response(
@@ -75,7 +75,7 @@ async def test_text_response_parses_context_summary(provider):
         content="The answer is 42.\n---\nContext: User asked for the answer."
     )
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, usage = await provider.generate(
@@ -109,7 +109,7 @@ async def test_cache_hit_tokens_from_prompt_tokens_details(provider):
     """DeepSeek/OpenAI/Gemini cache hits arrive via prompt_tokens_details.cached_tokens."""
     response = _mk_response(content="ok", prompt_tokens=1000, cached_tokens=800)
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ):
         _, usage = await provider.generate(
@@ -132,7 +132,7 @@ async def test_cache_hit_tokens_anthropic_fallback(provider):
         cache_creation_input_tokens=200,
     )
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ):
         _, usage = await provider.generate(
@@ -150,7 +150,7 @@ async def test_tool_call_parsing(provider, calculator_tool):
         tool_calls=[_mk_tool_call("tc-abc", "calculate", {"expression": "1+1"})]
     )
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, usage = await provider.generate(
@@ -178,7 +178,7 @@ async def test_tool_call_parsing(provider, calculator_tool):
 async def test_api_base_and_key_passthrough_for_openai_compatible(provider, calculator_tool):
     response = _mk_response(content="ok")
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         await provider.generate(
@@ -219,7 +219,7 @@ async def test_generate_accepts_tool_result_messages(provider, calculator_tool):
     ]
 
     with patch(
-        "errand.brain.providers.litellm.litellm.acompletion",
+        "paw.brain.providers.litellm.litellm.acompletion",
         new=AsyncMock(return_value=response),
     ) as mock:
         decision, _ = await provider.generate(

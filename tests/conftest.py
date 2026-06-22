@@ -7,7 +7,7 @@ functions don't need a per-test `@pytest.mark.asyncio` decorator.
 import sys
 from pathlib import Path
 
-# Ensure the project root is on sys.path so `import errand` works
+# Ensure the project root is on sys.path so `import paw` works
 # whether pytest is invoked from the repo root or elsewhere.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
