@@ -44,8 +44,7 @@ _SKIP_MODULES = {"__init__", "registry"}
 # rather than in individual tool descriptions or general runtime prose.
 TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
-    "- Think before calling. Reach for a tool only when it adds information or "
-    "an effect you cannot produce yourself; otherwise reason and answer directly.\n"
+    "- Think before calling. Reach for a tool only when it's definitely necessary.\n"
     "- Route, don't search, for the knowledge base. Resolve the path from the "
     "inlined index and read_file it directly; use grep_files or list_dir only "
     "when the index has no pointer — not to rediscover what it already maps.\n"
