@@ -103,27 +103,62 @@ def _extract_usage(response) -> dict:
     }
 
 
-def _cache_system_message(message: dict) -> dict:
-    """Wrap the system prompt with a cache_control breakpoint.
+def _with_cache_breakpoint(message: dict) -> dict:
+    """Return a copy of ``message`` with a cache_control breakpoint on its content.
 
-    This is an Anthropic-style explicit breakpoint: LiteLLM maps it to
-    Anthropic ``cache_control`` blocks. It is a NO-OP for Gemini and DeepSeek
-    -- they use *implicit* (automatic, prefix-based) caching that needs no
-    flag, so the cache hits we see on those providers come from implicit
-    caching, not from this breakpoint. Providers ignore the field harmlessly.
+    Anthropic-style explicit breakpoint: LiteLLM maps it to Anthropic
+    ``cache_control`` blocks. It is a NO-OP for Gemini and DeepSeek -- they use
+    *implicit* (automatic, prefix-based) caching that needs no flag, so the
+    cache hits we see on those providers come from implicit caching, not from
+    this breakpoint. Providers ignore the field harmlessly.
+
+    Handles both string content (wrapped into a single text block) and an
+    existing list of content blocks (breakpoint added to the last block).
+    Messages with no usable content (e.g. an assistant message carrying only
+    ``tool_calls``) are returned unchanged.
     """
-    if message.get("role") != "system" or not isinstance(message.get("content"), str):
-        return message
-    return {
-        **message,
-        "content": [
-            {
-                "type": "text",
-                "text": message["content"],
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-    }
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        return {
+            **message,
+            "content": [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    if isinstance(content, list) and content:
+        blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+        if isinstance(blocks[-1], dict):
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+            return {**message, "content": blocks}
+    return message
+
+
+def _apply_cache_breakpoints(messages: list[dict]) -> list[dict]:
+    """Place cache_control breakpoints to maximize prefix-cache reuse.
+
+    Two breakpoints (within Anthropic's limit of four):
+
+    - **Static**: the system prompt, hot across every call in the session.
+    - **Rolling**: the LAST message of this request. Each call in a tool loop
+      (and each new turn) extends the previous request, so marking the tail
+      lets a breakpoint-based cache (Anthropic) grow with the conversation
+      instead of being pinned to the system prompt. The cache is incremental,
+      so a breakpoint further along reuses the already-cached prefix and only
+      writes the new suffix.
+    """
+    if not messages:
+        return messages
+    out = list(messages)
+    if out[0].get("role") == "system":
+        out[0] = _with_cache_breakpoint(out[0])
+    # Rolling breakpoint on the tail, unless the tail *is* the system message.
+    if len(out) > 1:
+        out[-1] = _with_cache_breakpoint(out[-1])
+    return out
 
 
 def _parse_text_for_context_summary(text: str) -> BrainDecision:
@@ -182,9 +217,7 @@ class LiteLLMProvider(LLMProvider):
         extra_body: Optional[dict] = None,
         reasoning_effort: Optional[str] = None,
     ) -> Tuple[BrainDecision, dict]:
-        request_messages = list(messages)
-        if request_messages:
-            request_messages[0] = _cache_system_message(request_messages[0])
+        request_messages = _apply_cache_breakpoints(messages)
         response = await litellm.acompletion(
             **_build_call_kwargs(model, api_base, api_key, extra_body, reasoning_effort),
             messages=request_messages,

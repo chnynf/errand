@@ -137,6 +137,32 @@ def test_soul_and_profile_blocks_are_cached(tmp_path):
     assert assembler._soul_block == cached
 
 
+def test_build_messages_places_volatile_context_after_history():
+    """Caching invariant: stable prefix is system + history; volatile per-turn
+    context (time/summary/instruction) goes last so it can't break the prefix."""
+    assembler = PromptAssembler()
+    history = [
+        {"role": "user", "content": "apply the plan"},
+        {"role": "assistant", "content": "done"},
+    ]
+    messages = assembler.build_messages(
+        history,
+        context_summary="rolling summary",
+        instruction="Decide whether to call a tool or respond directly.",
+    )
+
+    assert messages[0]["role"] == "system"
+    # History sits immediately after the system prompt (cacheable prefix).
+    assert messages[1] == {"role": "user", "content": "apply the plan"}
+    assert messages[2] == {"role": "assistant", "content": "done"}
+    # The time-varying context is the final message.
+    last = messages[-1]
+    assert last["role"] == "user"
+    assert "CURRENT CONTEXT:" in last["content"]
+    assert "CONTEXT SUMMARY:\nrolling summary" in last["content"]
+    assert "INSTRUCTION:\nDecide whether" in last["content"]
+
+
 def test_context_messages_include_summary_note_and_instruction():
     assembler = PromptAssembler()
     messages = assembler.build_context_messages(

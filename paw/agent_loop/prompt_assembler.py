@@ -131,16 +131,25 @@ class PromptAssembler:
     ) -> list[dict]:
         """Assemble the full message list for one model call.
 
-        system prompt (cached prefix) -> per-turn context -> conversation history.
+        Order: system prompt -> conversation history -> per-turn context.
+
+        The volatile per-turn context (current time, rolling summary,
+        instruction) is placed LAST, after history, so the stable prefix is
+        ``system prompt + prior history``. That prefix grows monotonically
+        across turns and stays eligible for provider prefix caching (Gemini's
+        implicit cache, etc.). Putting the time-varying context up front --
+        right after the system prompt -- instead acts as a cache barrier: it
+        changes every turn, so nothing after it can be prefix-matched and the
+        whole growing history is re-billed fresh on every call.
         """
         return [
             {"role": "system", "content": self.build_system_prompt()},
+            *history_messages,
             *self.build_context_messages(
                 context_summary=context_summary,
                 session_note=session_note,
                 instruction=instruction,
             ),
-            *history_messages,
         ]
 
     def _file_access_section(self) -> str:

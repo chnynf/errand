@@ -96,7 +96,11 @@ async def test_text_response_parses_context_summary(provider):
     assert sys_msg["role"] == "system"
     assert sys_msg["content"][0]["text"] == "soul"
     assert sys_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
-    assert kwargs["messages"][1] == {"role": "user", "content": "What is 42?"}
+    # Rolling breakpoint: the last message also carries cache_control.
+    last_msg = kwargs["messages"][1]
+    assert last_msg["role"] == "user"
+    assert last_msg["content"][0]["text"] == "What is 42?"
+    assert last_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert kwargs["tools"] == []
 
     assert decision.tool_calls == []
@@ -273,9 +277,75 @@ async def test_generate_accepts_tool_result_messages(provider, calculator_tool):
     assert messages[2]["tool_calls"][0]["function"]["arguments"] == json.dumps(
         {"expression": "1+1"}
     )
-    assert messages[3] == {"role": "tool", "tool_call_id": "tc-1", "content": "2"}
+    # The last message (the tool result) gets the rolling cache breakpoint, so
+    # its content is wrapped into a block list carrying cache_control.
+    tool_msg = messages[3]
+    assert tool_msg["role"] == "tool"
+    assert tool_msg["tool_call_id"] == "tc-1"
+    assert tool_msg["content"][0]["text"] == "2"
+    assert tool_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
     assert decision.text_response == "Final answer: 2"
+
+
+async def test_cache_breakpoints_mark_system_and_tail_only(provider, calculator_tool):
+    """Static breakpoint on the system prompt + rolling breakpoint on the tail;
+    interior messages are left untouched so the prefix stays byte-stable."""
+    response = _mk_response(content="ok")
+    messages = [
+        {"role": "system", "content": "soul"},
+        {"role": "user", "content": "do the thing"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "type": "function",
+                    "function": {"name": "calculate", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tc-1", "content": "interim result"},
+    ]
+    with patch(
+        "paw.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ) as mock:
+        await provider.generate(
+            model="anthropic/claude-3-5-sonnet",
+            messages=messages,
+            tool_definitions=[calculator_tool],
+        )
+
+    sent = mock.await_args.kwargs["messages"]
+    # System: wrapped with cache_control.
+    assert sent[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    # Interior user + assistant messages: unchanged (no cache_control).
+    assert sent[1] == {"role": "user", "content": "do the thing"}
+    assert "cache_control" not in json.dumps(sent[2])
+    # Tail (the tool result): rolling breakpoint.
+    assert sent[3]["content"][0]["text"] == "interim result"
+    assert sent[3]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    # The original input list is not mutated.
+    assert messages[3] == {"role": "tool", "tool_call_id": "tc-1", "content": "interim result"}
+
+
+async def test_single_system_message_gets_no_rolling_breakpoint(provider):
+    """With only a system message there is no separate tail to mark."""
+    response = _mk_response(content="ok")
+    with patch(
+        "paw.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ) as mock:
+        await provider.generate(
+            model="gemini/gemini-3.5-flash",
+            messages=[{"role": "system", "content": "soul"}],
+            tool_definitions=[],
+        )
+
+    sent = mock.await_args.kwargs["messages"]
+    assert len(sent) == 1
+    assert sent[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_is_retryable_classifies_known_litellm_errors(provider):

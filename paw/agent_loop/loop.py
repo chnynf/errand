@@ -38,7 +38,7 @@ MAX_RESPONSE_RETRIES = 3
 # loop condenses everything gathered so far into a summary and continues as a
 # fresh internal segment -- same turn, same single reply to the interface.
 # Caching covers the cheap case; this only fires when one turn reads a lot.
-COMPACTION_TRIGGER_TOKENS = 20_000
+COMPACTION_TRIGGER_TOKENS = 5_000
 MAX_COMPACTIONS = 3
 
 # Orchestration instruction the loop injects to condense an oversized turn
