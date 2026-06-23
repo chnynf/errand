@@ -137,6 +137,7 @@ class AgentSpec:
     model_strategy: list[str] = field(default_factory=list)
     can_delegate: list[str] = field(default_factory=list)
     max_tool_rounds: int = 8
+    reasoning_effort: str | None = None
 
     @classmethod
     def from_dict(
@@ -147,6 +148,7 @@ class AgentSpec:
         defaults: dict | None = None,
     ) -> "AgentSpec":
         defaults = defaults or {}
+        effort = data.get("reasoning_effort")
         return cls(
             id=agent_id,
             description=str(data.get("description") or ""),
@@ -163,6 +165,7 @@ class AgentSpec:
                 or defaults.get("max_tool_rounds")
                 or 8
             ),
+            reasoning_effort=str(effort) if effort else None,
         )
 
 

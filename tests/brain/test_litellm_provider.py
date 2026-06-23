@@ -197,6 +197,43 @@ async def test_api_base_and_key_passthrough_for_openai_compatible(provider, calc
     assert kwargs["api_key"] == "sk-test-siliconflow"
 
 
+async def test_reasoning_effort_passed_with_drop_params(provider, calculator_tool):
+    """``reasoning_effort`` is forwarded to LiteLLM with ``drop_params`` so it
+    can span a fallback chain that mixes reasoning and non-reasoning models."""
+    response = _mk_response(content="ok")
+    with patch(
+        "paw.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ) as mock:
+        await provider.generate(
+            model="gemini/gemini-3.5-flash",
+            messages=[{"role": "system", "content": "soul"}],
+            tool_definitions=[calculator_tool],
+            reasoning_effort="high",
+        )
+
+    kwargs = mock.await_args.kwargs
+    assert kwargs["reasoning_effort"] == "high"
+    assert kwargs["drop_params"] is True
+
+
+async def test_reasoning_effort_omitted_when_unset(provider, calculator_tool):
+    response = _mk_response(content="ok")
+    with patch(
+        "paw.brain.providers.litellm.litellm.acompletion",
+        new=AsyncMock(return_value=response),
+    ) as mock:
+        await provider.generate(
+            model="gemini/gemini-3.5-flash",
+            messages=[{"role": "system", "content": "soul"}],
+            tool_definitions=[calculator_tool],
+        )
+
+    kwargs = mock.await_args.kwargs
+    assert "reasoning_effort" not in kwargs
+    assert "drop_params" not in kwargs
+
+
 async def test_generate_accepts_tool_result_messages(provider, calculator_tool):
     response = _mk_response(content="Final answer: 2")
     request_messages = [

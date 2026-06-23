@@ -97,6 +97,36 @@ def test_resolve_model_unknown_key_falls_back_to_passthrough(brain):
     assert overrides == {}
 
 
+def test_resolve_model_includes_agent_reasoning_effort(brain):
+    brain.reasoning_effort = "high"
+    _, _, _, overrides = brain._resolve_model("gemini-flash")
+    assert overrides["reasoning_effort"] == "high"
+
+
+def test_resolve_model_no_effort_omits_override(brain):
+    """Unset effort sends no param so the provider's own default applies."""
+    _, _, _, overrides = brain._resolve_model("gemini-flash")
+    assert "reasoning_effort" not in overrides
+
+
+async def test_decide_forwards_agent_reasoning_effort(brain):
+    """Agent-level effort flows through ``decide`` into the LiteLLM call."""
+    brain.reasoning_effort = "high"
+    response = _mk_response(content="ok\n---\nContext: cs")
+    mock_acompletion = AsyncMock(return_value=response)
+    with patch(
+        "paw.brain.providers.litellm.litellm.acompletion",
+        new=mock_acompletion,
+    ):
+        await brain.decide(
+            messages=[{"role": "system", "content": "soul"}, {"role": "user", "content": "hi"}],
+        )
+
+    kwargs = mock_acompletion.await_args.kwargs
+    assert kwargs["reasoning_effort"] == "high"
+    assert kwargs["drop_params"] is True
+
+
 async def test_decide_falls_through_to_next_model_on_retryable_error(brain):
     """First strategy entry raises a retryable error; second succeeds."""
     from litellm.exceptions import RateLimitError

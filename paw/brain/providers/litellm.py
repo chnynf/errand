@@ -145,6 +145,7 @@ def _build_call_kwargs(
     api_base: Optional[str],
     api_key: Optional[str],
     extra_body: Optional[dict] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> dict:
     kwargs = {"model": model}
     if api_base:
@@ -153,6 +154,13 @@ def _build_call_kwargs(
         kwargs["api_key"] = api_key
     if extra_body:
         kwargs["extra_body"] = extra_body
+    if reasoning_effort:
+        # LiteLLM normalizes ``reasoning_effort`` into each provider's native
+        # thinking/reasoning controls. ``drop_params`` lets it silently skip
+        # the param for models that don't support reasoning, so a single
+        # effort setting can span the whole fallback chain without crashing.
+        kwargs["reasoning_effort"] = reasoning_effort
+        kwargs["drop_params"] = True
     return kwargs
 
 
@@ -172,12 +180,13 @@ class LiteLLMProvider(LLMProvider):
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         extra_body: Optional[dict] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Tuple[BrainDecision, dict]:
         request_messages = list(messages)
         if request_messages:
             request_messages[0] = _cache_system_message(request_messages[0])
         response = await litellm.acompletion(
-            **_build_call_kwargs(model, api_base, api_key, extra_body),
+            **_build_call_kwargs(model, api_base, api_key, extra_body, reasoning_effort),
             messages=request_messages,
             tools=_tool_defs_to_openai(tool_definitions),
         )

@@ -49,7 +49,27 @@ That index contains the shared agent soul and routes to the relevant sub-KB.
     #   - set shared_soul / agent_profile to your KB paths (see below)
     #   - enable/disable interfaces
     #   - adjust model_strategy to match your API keys
+    #   - tune reasoning_effort per agent (see below)
     ```
+
+### Reasoning Effort
+
+`reasoning_effort` is an optional cross-model knob (`"minimal"` / `"low"` /
+`"medium"` / `"high"`). LiteLLM translates it into each provider's native
+thinking/reasoning controls, so one setting spans the whole `model_strategy`
+fallback chain — and LiteLLM silently drops it for models that don't support
+reasoning.
+
+Set it per agent when you want to override the model's behavior:
+
+```jsonc
+"agents": {
+    "applied-scientist": { "reasoning_effort": "high" }
+}
+```
+
+When an agent leaves it unset (the default), Paw sends no reasoning parameter
+and each provider applies its own default thinking behavior.
 
 ## Usage
 

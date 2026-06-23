@@ -53,6 +53,11 @@ class Brain:
         self.agent_id = agent_spec.id if agent_spec else "default"
         spec_strategy = getattr(agent_spec, "model_strategy", None) if agent_spec else None
         self.model_strategy: List[str] = list(spec_strategy or default_strategy)
+        # Optional per-agent reasoning effort. Unset means "use the provider's
+        # own default" -- we simply send no reasoning_effort param.
+        self.reasoning_effort: Optional[str] = (
+            getattr(agent_spec, "reasoning_effort", None) if agent_spec else None
+        )
         self.base_delay: int = (retry or {}).get("base_delay_seconds", 2)
 
         if not self.model_strategy:
@@ -82,6 +87,11 @@ class Brain:
             overrides["api_key"] = os.getenv(api_key_env)
         if model_info.get("extra_body"):
             overrides["extra_body"] = dict(model_info["extra_body"])
+
+        # Optional per-agent reasoning effort. When unset we pass nothing, so
+        # each provider applies its own default thinking behavior.
+        if self.reasoning_effort:
+            overrides["reasoning_effort"] = self.reasoning_effort
 
         return provider_name, actual_model, native_flag, overrides
 

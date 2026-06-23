@@ -107,7 +107,8 @@
                 "gemini-flash",
                 "siliconflow-deepseek-v4-flash"
             ],
-            "can_delegate": []
+            "can_delegate": [],
+            "reasoning_effort": "high"
         }
     },
 

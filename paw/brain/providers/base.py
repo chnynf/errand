@@ -31,8 +31,14 @@ class LLMProvider(abc.ABC):
         api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         extra_body: Optional[dict] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Tuple[BrainDecision, dict]:
-        """Make an API call with native tool definitions."""
+        """Make an API call with native tool definitions.
+
+        ``reasoning_effort`` is LiteLLM's cross-model knob ("minimal" /
+        "low" / "medium" / "high"); LiteLLM translates it into each
+        provider's native thinking/reasoning controls.
+        """
 
     @abc.abstractmethod
     def is_retryable(self, exc: Exception) -> bool:

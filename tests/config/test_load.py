@@ -118,3 +118,30 @@ def test_load_paw_config_parses_agents_and_external_agents(tmp_path: Path):
     assert config.get_agent("generalist").can_delegate == ["cursor"]
     assert config.external_agents["cursor"].command == ["cursor-agent", "--print"]
     assert config.external_agents["cursor"].prompt_mode == "stdin"
+
+
+def test_load_paw_config_parses_per_agent_reasoning_effort(tmp_path: Path):
+    """Effort is read only from each agent; unset means provider default (None)."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "default_agent": "generalist",
+                "model_strategy": ["fast"],
+                "agents": {
+                    "generalist": {"agent_profile": "g"},
+                    "applied-scientist": {
+                        "agent_profile": "as",
+                        "reasoning_effort": "high",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_paw_config(config_path)
+    # Unset -> no override; provider default applies.
+    assert config.get_agent("generalist").reasoning_effort is None
+    # Set per-agent.
+    assert config.get_agent("applied-scientist").reasoning_effort == "high"
