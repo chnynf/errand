@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 
 from paw.config import PawConfig, load_paw_config
 from paw.contracts.interfaces import PawInterface, UserMessage
-from paw.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT, is_new_session_command
+from paw.runtime.control import (
+    NEW_SESSION_MESSAGE,
+    is_new_session_command,
+    reload_message,
+)
 from paw.runtime.debug import set_debug
 from paw.scheduler.service import SchedulerService
 
@@ -103,7 +107,7 @@ class PawApp:
         metadata["_reply_to"] = message.reply_to
         metadata["_source"] = message.source
         agent_id = metadata.get("agent_id") or self.config.default_agent
-        if await self._handle_control_command(message, agent_id, metadata):
+        if await self._handle_control_command(message, agent_id):
             return
         response = await self.session_manager.process(
             message.session_id,
@@ -122,7 +126,6 @@ class PawApp:
         self,
         message: UserMessage,
         agent_id: str,
-        metadata: dict,
     ) -> bool:
         command = message.text.strip().lower()
         if is_new_session_command(command):
@@ -131,7 +134,7 @@ class PawApp:
                 start_new=True,
                 agent_id=agent_id,
             )
-            await self._respond_to_control(message, agent_id, metadata, NEW_SESSION_PROMPT)
+            await self._send_control_reply(message, NEW_SESSION_MESSAGE)
             return True
 
         if not command.startswith("/reload"):
@@ -142,29 +145,20 @@ class PawApp:
             await message.reply_to.send("Usage: /reload [soul|index|profile|prompts]")
             return True
 
-        soul, profile, _ = reload_args
+        soul, profile, target = reload_args
         self.reload_prompt_resources(message.session_id, agent_id, soul=soul, profile=profile)
-        await self._respond_to_control(message, agent_id, metadata, RELOAD_PROMPT)
+        await self._send_control_reply(message, reload_message(target))
         return True
 
-    async def _respond_to_control(
-        self,
-        message: UserMessage,
-        agent_id: str,
-        metadata: dict,
-        prompt: str,
-    ) -> None:
-        control_metadata = dict(metadata)
-        control_metadata["suppress_usage_footer"] = True
-        response = await self.session_manager.process(
-            message.session_id,
-            prompt,
-            metadata=control_metadata,
-            agent_id=agent_id,
-        )
+    async def _send_control_reply(self, message: UserMessage, text: str) -> None:
+        """Send a static control-command confirmation straight to the user.
+
+        Control commands never invoke the model -- this sends a fixed,
+        prefixed status line instead of running a turn just to acknowledge.
+        """
         await self._send_final(
             message.reply_to,
-            response,
+            text,
             source=message.source,
             context_id=message.session_id,
         )

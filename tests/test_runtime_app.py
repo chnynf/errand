@@ -5,7 +5,7 @@ import uvicorn
 
 from paw.interfaces.web.interface import WebInterface
 from paw.contracts.interfaces import UserMessage
-from paw.runtime.control import NEW_SESSION_PROMPT, RELOAD_PROMPT
+from paw.runtime.control import NEW_SESSION_MESSAGE, reload_message
 from paw.runtime.app import PawApp
 
 
@@ -107,7 +107,7 @@ async def test_web_interface_disables_uvicorn_signal_capture(monkeypatch) -> Non
     assert server.should_exit
 
 
-async def test_reset_command_archives_current_session() -> None:
+async def test_reset_command_archives_and_replies_without_model() -> None:
     class Manager:
         def __init__(self):
             self.calls = []
@@ -118,7 +118,7 @@ async def test_reset_command_archives_current_session() -> None:
 
         async def process(self, session_id, text, metadata=None, agent_id=None):
             self.process_calls.append((session_id, text, metadata, agent_id))
-            return "New session started."
+            return "should not be called"
 
     reply = _Reply()
     manager = Manager()
@@ -131,9 +131,9 @@ async def test_reset_command_archives_current_session() -> None:
     )
 
     assert manager.calls == [("s1", True, "generalist")]
-    assert manager.process_calls[0][0:2] == ("s1", NEW_SESSION_PROMPT)
-    assert manager.process_calls[0][2]["suppress_usage_footer"] is True
-    assert reply.messages == ["New session started."]
+    # No model turn: the control command replies with a static, prefixed line.
+    assert manager.process_calls == []
+    assert reply.messages == [NEW_SESSION_MESSAGE]
 
 
 class _RaisingReply:
@@ -265,6 +265,6 @@ async def test_reload_command_reloads_cached_prompts() -> None:
 
     assert manager.get_args == ("s1", "generalist", 0)
     assert manager.reload_args == (True, False)
-    assert manager.process_calls[0][0:2] == ("s1", RELOAD_PROMPT)
-    assert manager.process_calls[0][2]["suppress_usage_footer"] is True
-    assert reply.messages == ["Reloaded."]
+    # No model turn: the control command replies with a static, prefixed line.
+    assert manager.process_calls == []
+    assert reply.messages == [reload_message("soul")]

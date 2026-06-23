@@ -1,7 +1,20 @@
-"""Shared runtime control command helpers."""
+"""Shared runtime control command helpers.
 
-NEW_SESSION_PROMPT = "User started a new session. Acknowledge briefly."
-RELOAD_PROMPT = "Runtime instructions were reloaded. Acknowledge briefly."
+Control commands (``/new``, ``/reset``, ``archive``, ``/reload ...``) are
+handled entirely by the runtime and never invoke the model. Each sends a short,
+prefixed status line straight back to the user, so there is no wasted model turn
+just to "acknowledge" a new session or a reload.
+"""
+
+# Prefix marking a message as a runtime control reply (not model output).
+CONTROL_REPLY_PREFIX = "🐾 "
+
+NEW_SESSION_MESSAGE = f"{CONTROL_REPLY_PREFIX}New session started."
+
+
+def reload_message(target: str) -> str:
+    """User-facing confirmation for a ``/reload`` command."""
+    return f"{CONTROL_REPLY_PREFIX}Reloaded {target}."
 
 
 def is_new_session_command(text: str) -> bool:
