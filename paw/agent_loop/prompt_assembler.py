@@ -5,7 +5,10 @@ prompt assembly, so it owns it. The brain just decides over the assembled
 messages. The system prompt is intentionally small. It tells the agent:
 - it is running inside Paw
 - the shared soul and configured agent profile resolved from prompt includes
-- how to use scoped file tools and the response format Paw expects
+- the response format Paw expects
+
+The tool catalog and file-scope locations come from the tools component (passed
+in as ``tool_summary``), not from this module.
 
 ``agent.md`` may contain host-side include placeholders. The model only sees
 the resolved prompt text, never the include directive.
@@ -99,8 +102,6 @@ class PromptAssembler:
 
         if self._tool_summary:
             parts.append(self._tool_summary)
-        if self._file_access.scopes:
-            parts.append(self._file_access_section())
 
         return "\n\n".join(parts)
 
@@ -151,32 +152,6 @@ class PromptAssembler:
                 instruction=instruction,
             ),
         ]
-
-    def _file_access_section(self) -> str:
-        lines = [
-            "FILE TOOL SCOPES:",
-            "Pass a scope name to the file tools. Each scope lists per-operation",
-            "permissions: true=allow, false=block, ask=requires approval.",
-            "Tools: read_file, list_dir, grep_files, find_files, write_file,",
-            "append_file, edit_file, delete_file.",
-            "Read files before quoting them. Use append_file to add new notes;",
-            "edit_file for targeted updates; write_file only for new or replacement files.",
-        ]
-        if self._file_access.scopes:
-            lines.append(f"- DEFAULT_FILE_SCOPE: {self._file_access.default_scope}")
-            for name, scope in sorted(self._file_access.scopes.items()):
-                roots = ", ".join(scope.roots)
-                ops = {
-                    "read":   scope.read,
-                    "list":   scope.list,
-                    "write":  scope.write,
-                    "append": scope.append,
-                    "edit":   scope.edit,
-                    "delete": scope.delete,
-                }
-                perm_str = ", ".join(f"{op}={val}" for op, val in ops.items())
-                lines.append(f"- FILE_SCOPE {name}: roots=[{roots}], ops=[{perm_str}]")
-        return "\n".join(lines)
 
     def _render_agent_template(self) -> str:
         blocks = [

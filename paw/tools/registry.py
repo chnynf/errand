@@ -51,16 +51,16 @@ TOOL_USE_GUIDANCE = (
     "Sequence calls only when necessary."
 )
 
-# Hot-path tools kept as real native tool-calls (full schema + provider-side
-# arg validation). Every other tool is reached through the ``call_tool``
-# dispatcher and described only in the lightweight catalog, so the always-loaded
-# tool footprint stays small.
+# Core tools kept as real native tool-calls (full schema + provider-side arg
+# validation). Every other tool is reached through the ``call_tool`` dispatcher
+# and described only in the lightweight catalog, so the always-loaded tool
+# footprint stays small.
 #
-# Only direct reads (read_file/list_dir) are hot-path. Search (grep_files,
-# find_files) is intentionally left in the catalog: routing it through
-# call_tool gives it the same friction as every other tool, so the model
-# reaches for the inlined index first instead of reflexively searching.
-_DEFAULT_NATIVE = ("read_file", "list_dir")
+# The core set is the high-frequency work: reading (``read_file``) and
+# delegation (``invoke_agent``, ``invoke_external_agent``). Everything else --
+# search, writes, scheduling, email, etc. -- lives in the catalog and is reached
+# via ``call_tool``, with ``tool_manual`` for full per-tool usage on demand.
+_DEFAULT_NATIVE = ("invoke_agent", "invoke_external_agent", "read_file")
 
 _CALL_TOOL = "call_tool"
 _TOOL_MANUAL = "tool_manual"
@@ -278,10 +278,22 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def manual(self, name: str) -> str:
-        """Full usage docs (signature + docstring) for one tool."""
+        """Full usage docs (signature + docstring) for one tool.
+
+        For scoped file tools (those taking a ``scope`` argument) the available
+        scope locations are appended, since they come from config rather than
+        the static docstring.
+        """
         for desc in self._descriptions:
             if desc["name"] == name:
-                return f"{name}{desc['signature']}\n\n{desc['doc']}"
+                doc = f"{name}{desc['signature']}\n\n{desc['doc']}"
+                if "scope" in self._public_params(name):
+                    from paw.tools.files import _scope_locations
+
+                    scopes = _scope_locations()
+                    if scopes:
+                        doc += f"\n\n{scopes}"
+                return doc
         return f"Error: unknown tool '{name}'."
 
     async def execute(
@@ -352,15 +364,18 @@ class ToolRegistry:
     def tool_summary(self) -> str:
         """Tool catalog + cross-tool guidance, for the system prompt.
 
-        The hot-path file tools are callable directly; every catalog tool below
-        is invoked via ``call_tool(name, args)``, with ``tool_manual(name)`` for
-        full usage.
+        The single contribution of the tools component to the system prompt: the
+        core tools are exposed directly as functions (your tool list); every
+        catalog tool below is invoked via ``call_tool(name, args)``, with
+        ``tool_manual(name)`` for full usage on demand (file tools' scope
+        locations are appended there, not here).
         """
         return (
             "TOOLS:\n"
-            "File read/search tools are callable directly. Every tool below is "
-            "invoked with call_tool(name, args); call tool_manual(name) first if "
-            "you are unsure how to use one.\n\n"
+            "The directly callable functions in your tool list are the core "
+            "tools. Every other tool is in the catalog below and is invoked via "
+            "call_tool(name, args). Call tool_manual(name) for a tool's full "
+            "usage before using one you are unsure about.\n\n"
             "CATALOG (name(args): purpose):\n"
             f"{self.catalog()}\n\n"
             f"{TOOL_USE_GUIDANCE}"

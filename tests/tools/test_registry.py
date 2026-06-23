@@ -134,6 +134,60 @@ def test_tool_summary_lists_catalog_and_nudges(tools_dir: Path):
     assert "Think before calling" in summary
 
 
+def test_scope_locations_in_manual_not_summary(tmp_path: Path, monkeypatch):
+    """File-tool scopes live in the tool manual, not the high-level summary.
+
+    Scopes are rendered as locations only -- no permission matrix exposed.
+    """
+    from paw.config import PawConfig, FileAccessConfig, FileScope
+    import paw.tools.files as ft
+
+    cfg = PawConfig(
+        file_access=FileAccessConfig(
+            default_scope="kb",
+            scopes={
+                "kb": FileScope(roots=["~/Documents/kb"]),
+                "notes": FileScope(roots=["~/Documents/kb/notes"], write="ask"),
+            },
+        )
+    )
+    monkeypatch.setattr(ft, "load_paw_config", lambda: cfg)
+
+    # A tools dir with one scoped (file-like) tool and one unscoped tool.
+    d = tmp_path / "tools"
+    d.mkdir()
+    (d / "__init__.py").write_text("", encoding="utf-8")
+    (d / "fs.py").write_text(
+        dedent(
+            '''
+            def grab(path: str, scope: str = "kb") -> str:
+                """Read a file from a scope."""
+                return path
+
+            def ping() -> str:
+                """Unscoped tool."""
+                return "ok"
+            '''
+        ),
+        encoding="utf-8",
+    )
+    registry = ToolRegistry(tools_dir=d)
+
+    summary = registry.tool_summary()
+    assert "FILE SCOPES" not in summary  # not in the high-level summary anymore
+
+    scoped_manual = registry.manual("grab")
+    assert "FILE SCOPES (locations the file tools can access; pass `scope`, default kb):" in scoped_manual
+    assert "- kb: ~/Documents/kb" in scoped_manual
+    assert "- notes: ~/Documents/kb/notes" in scoped_manual
+    # Permission values stay out of the prompt; the harness enforces them.
+    assert "write=ask" not in scoped_manual
+    assert "ops=" not in scoped_manual
+
+    # Unscoped tools get no scope block.
+    assert "FILE SCOPES" not in registry.manual("ping")
+
+
 def test_execute_sync_and_async_tools(tools_dir: Path):
     registry = ToolRegistry(tools_dir=tools_dir)
     assert asyncio.run(registry.execute("add", {"a": 2, "b": 3})) == 5

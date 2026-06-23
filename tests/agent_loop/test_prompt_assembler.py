@@ -38,7 +38,7 @@ def test_context_messages_include_current_context():
     assert "UTC:" in messages[0]["content"]
 
 
-def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
+def test_system_prompt_includes_agent_profile_contents(tmp_path):
     soul = tmp_path / "SOUL.md"
     profile = tmp_path / "INDEX.md"
     soul.write_text("# Shared Soul\n\nBe grounded.", encoding="utf-8")
@@ -67,11 +67,8 @@ def test_system_prompt_includes_agent_profile_contents_and_scope(tmp_path):
     assert "{{ include:AGENT_PROFILE }}" not in prompt
     assert str(soul) not in prompt
     assert str(profile) not in prompt
-    assert "FILE TOOL SCOPES:" in prompt
-    assert "write_file" in prompt
-    assert "DEFAULT_FILE_SCOPE: kb" in prompt
-    assert f"FILE_SCOPE kb: roots=[{tmp_path}]" in prompt
-    assert "read_file" in prompt
+    # File scopes are owned by the tools component now, not the assembler.
+    assert "FILE TOOL SCOPES:" not in prompt
     assert "Start by reading AGENT_PROFILE" not in prompt
 
 

@@ -141,6 +141,28 @@ async def _authorize(
     return None
 
 
+def _scope_locations() -> str:
+    """Render the file scopes as a compact location list for the system prompt.
+
+    A scope is a named set of directories the file tools may touch; the model
+    passes a scope name to each file tool. Only names and roots are surfaced --
+    a routing hint so the model can pick the right scope. Per-operation
+    permissions are intentionally omitted: the harness enforces run/approve/deny
+    at call time, so the model never needs them in advance. Leading ``_`` keeps
+    this out of the auto-discovered tool set.
+    """
+    file_access = load_paw_config().file_access
+    if not file_access.scopes:
+        return ""
+    lines = [
+        "FILE SCOPES (locations the file tools can access; pass `scope`, "
+        f"default {file_access.default_scope}):"
+    ]
+    for name, scope in sorted(file_access.scopes.items()):
+        lines.append(f"- {name}: {', '.join(scope.roots)}")
+    return "\n".join(lines)
+
+
 def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
     """Read a known file path. Reads agent knowledge, profiles, SOPs, notes.
 
