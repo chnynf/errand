@@ -45,13 +45,10 @@ _SKIP_MODULES = {"__init__", "registry"}
 TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
     "- Think before calling. Reach for a tool only when it's definitely necessary.\n"
-    "- Route, don't search, for the knowledge base. Resolve the path from the "
-    "inlined index and read_file it directly; use grep_files or list_dir only "
-    "when the index has no pointer — not to rediscover what it already maps.\n"
-    "- Batch independent work. When you need several independent things at once "
-    "(multiple files, or a read plus a search), issue them as parallel tool calls "
-    "in a single round; the runtime runs them concurrently. Sequence calls only "
-    "when a later one genuinely depends on an earlier result."
+    "- Route, don't search, for the knowledge base. Resolve the path from the index.\n"
+    "- Batch independent work in one round when you can. For multiple files, or a "
+    "read plus a search, issue parallel tool calls; For multiple file edits, make one combined edit if possible. "
+    "Sequence calls only when necessary."
 )
 
 # Hot-path tools kept as real native tool-calls (full schema + provider-side
