@@ -168,10 +168,26 @@ class Memory:
     def clear_session_note(self) -> None:
         self.data.setdefault("metadata", {}).pop("session_note", None)
 
-    def build_history_messages(self, recent_n: int = 20) -> list[dict]:
-        """Build role-tagged chat messages from persisted compact history."""
+    def build_history_messages(self, recent_n: int = 20, chunk: int = 8) -> list[dict]:
+        """Build role-tagged chat messages from persisted compact history.
+
+        The window start is *quantized* to ``chunk``-sized steps instead of
+        sliding one entry per turn. A start that advances every turn shifts the
+        whole ``system + history`` prefix and defeats provider prefix caching
+        (Gemini's implicit cache, Anthropic breakpoints): only the static system
+        prompt stays cached and the entire history is re-billed each turn. A
+        start that holds steady for ``chunk`` turns keeps the prefix stable and
+        growing, so the cache is reused across turns and only refreshes on the
+        occasional jump. The window holds between ``recent_n`` and
+        ``recent_n + chunk - 1`` entries.
+        """
         messages: list[dict] = []
-        history = self.data["history"][-recent_n:]
+        full = self.data["history"]
+        if len(full) <= recent_n:
+            start = 0
+        else:
+            start = ((len(full) - recent_n) // chunk) * chunk
+        history = full[start:]
         i = 0
         while i < len(history):
             entry = history[i]

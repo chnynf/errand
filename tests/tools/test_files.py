@@ -135,6 +135,21 @@ def test_read_file_with_base_path(kb: Path):
     assert ft.read_file("a.md", base_path="notes").startswith("alpha")
 
 
+def test_read_file_not_found_suggests_real_path(kb: Path):
+    # Wrong relative prefix: the file lives at notes/a.md, but the model guessed
+    # the bare name. The error should point at the real scope-relative path so
+    # no separate find_files round-trip is needed.
+    result = ft.read_file("a.md")
+    assert result.startswith("Error: Not a file:")
+    assert "notes/a.md" in result
+
+
+def test_read_file_not_found_no_match_has_no_hint(kb: Path):
+    result = ft.read_file("does-not-exist.md")
+    assert result.startswith("Error: Not a file:")
+    assert "Did you mean" not in result
+
+
 def test_list_dir_marks_dirs_and_hides_dotfiles(kb: Path):
     entries = ft.list_dir("").splitlines()
     assert "INDEX.md" in entries

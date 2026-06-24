@@ -98,6 +98,31 @@ def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
 
 
+def _suggest_paths(name: str, roots: list[Path], limit: int = 5) -> str:
+    """Find files anywhere under ``roots`` whose basename matches ``name``.
+
+    Used to turn a not-found ``read_file`` into a self-correcting error: the
+    model often guesses the wrong relative prefix or scope (e.g. ``sops/x.md``
+    when the file lives at ``generalist/sops/x.md``), so we point it straight at
+    the real scope-relative path instead of forcing a separate ``find_files``
+    round-trip. Returns a comma-separated list of scope-relative paths, or "".
+    """
+    if not name:
+        return ""
+    found: list[str] = []
+    for root in roots:
+        root = root.resolve()
+        if not root.is_dir():
+            continue
+        for entry in root.rglob(name):
+            rel = entry.relative_to(root)
+            if entry.is_file() and not any(part.startswith(".") for part in rel.parts):
+                found.append(str(rel).replace("\\", "/"))
+                if len(found) >= limit:
+                    return ", ".join(found)
+    return ", ".join(found)
+
+
 async def _authorize(
     file_scope: FileScope,
     scope_name: str,
@@ -169,7 +194,9 @@ def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
     Prefer this once you know where something lives (from an index or a prior
     search) instead of browsing for it. Reads one file; when you need several,
     issue multiple read_file calls in a single round (the runtime runs them
-    concurrently). For knowledge-base work use the default ``kb`` scope.
+    concurrently). For knowledge-base work use the default ``kb`` scope. If a
+    read comes back not-found, the error suggests the real scope-relative path
+    -- read that directly instead of issuing a separate search.
 
     Args:
         path: File path inside the scope. Relative paths resolve against the
@@ -185,7 +212,9 @@ def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
             raise PermissionError(f"'read' is not permitted in file scope '{name}'.")
         target = _located(path, roots, name, base_path=base_path or None)
         if not target.is_file():
-            raise FileNotFoundError(f"Not a file: {target}")
+            suggestion = _suggest_paths(Path(path).name, roots)
+            hint = f" Did you mean (scope '{name}'): {suggestion}?" if suggestion else ""
+            return f"Error: Not a file: {target}.{hint}"
         size = target.stat().st_size
         if size > MAX_READ_BYTES:
             raise ValueError(f"File too large ({size} bytes > {MAX_READ_BYTES}): {target}")
@@ -262,6 +291,7 @@ async def write_file(
     changes and ``append_file`` to add at the end; use this for new files or
     full replacement only.
     Call at most once per file per turn; put all content in a single write.
+    The returned status line confirms the write -- do not re-read to verify.
 
     Args:
         path: File path inside the scope.
@@ -307,6 +337,8 @@ async def append_file(
     Use for new notes, memories, or log entries. Prefer ``edit_file`` for in-place
     changes and ``write_file`` to replace a file wholesale.
     Call at most once per file per turn; combine what you add into one append.
+    The returned status line confirms the bytes were written -- do not re-read
+    the file afterward to verify.
 
     Args:
         path: File path inside the scope.
@@ -356,6 +388,7 @@ async def edit_file(
     include enough surrounding context to make the match unique.
     Prefer this over ``write_file`` for partial changes.
     Call at most once per file per turn; combine multiple edits into one call.
+    The returned status line confirms the change -- do not re-read to verify.
 
     Args:
         path: File path inside the scope.

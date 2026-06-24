@@ -166,6 +166,33 @@ def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
     assert memory.build_history_messages() == []
 
 
+def test_history_window_start_is_cache_stable(monkeypatch, tmp_path):
+    # The window start must hold steady across turns (so the message prefix
+    # stays cache-eligible) and only advance in coarse `chunk`-sized jumps,
+    # rather than sliding one entry per turn.
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("window-session")
+    for i in range(40):
+        memory.add_history("user", f"msg {i}")
+
+    def first_content(n_entries: int) -> str:
+        memory.data["history"] = [
+            {"role": "user", "content": f"msg {i}", "metadata": {}}
+            for i in range(n_entries)
+        ]
+        return memory.build_history_messages(recent_n=20, chunk=8)[0]["content"]
+
+    # Under the floor: nothing dropped, window starts at the very first entry.
+    assert first_content(20) == "msg 0"
+    # Past the floor but within the same chunk: start holds steady at 0.
+    assert first_content(21) == "msg 0"
+    assert first_content(27) == "msg 0"
+    # Crossing the chunk boundary advances the floor by exactly `chunk` (8).
+    assert first_content(28) == "msg 8"
+    assert first_content(35) == "msg 8"
+    assert first_content(36) == "msg 16"
+
+
 def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_path):
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     session_id = "wechat:o9cq80wyNyZ@im.wechat"
