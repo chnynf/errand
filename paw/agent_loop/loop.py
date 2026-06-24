@@ -38,7 +38,7 @@ MAX_RESPONSE_RETRIES = 3
 # loop condenses everything gathered so far into a summary and continues as a
 # fresh internal segment -- same turn, same single reply to the interface.
 # Caching covers the cheap case; this only fires when one turn reads a lot.
-COMPACTION_TRIGGER_TOKENS = 5_000
+COMPACTION_TRIGGER_TOKENS = 20_000
 MAX_COMPACTIONS = 3
 
 # Orchestration instruction the loop injects to condense an oversized turn
@@ -59,8 +59,9 @@ COMPACTION_INSTRUCTION = (
     "3. Decisions -- anything you have already concluded or chosen.\n"
     "4. Remaining -- what still needs to be done to finish the task.\n\n"
     "Do not call any tools. Respond with the summary text only -- no preamble. The "
-    "detailed history is being discarded, so anything you omit is gone; capture "
-    "any detail you may need later, or note that it must be re-read."
+    "detailed history is being discarded, so anything you omit is gone. Capture "
+    "every path, value, and file detail you will need so you can finish from this "
+    "summary ALONE, without re-reading anything you have already read."
 )
 
 # Tools a job is forbidden from calling while it is itself executing, so a
@@ -317,8 +318,10 @@ class AgentLoop:
                             session_note=self.memory.data.get("metadata", {}).get("session_note"),
                             instruction=(
                                 "The earlier tool history was condensed into the context "
-                                "summary above. Continue working toward the user's request; "
-                                "re-read or re-fetch any detail you still need."
+                                "summary above, which you wrote to be self-sufficient. "
+                                "Continue working toward the user's request using that "
+                                "summary; only re-read a file if you genuinely failed to "
+                                "capture something you need from it."
                             ),
                         )
                         action_count = 0

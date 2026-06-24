@@ -112,6 +112,23 @@ def _locate(path: str, *, base_path: str | None = None) -> tuple[Path, str, File
     raise PermissionError(f"Path is outside all allowed locations: {target}")
 
 
+def _read_cache(_context: dict[str, Any] | None) -> Any | None:
+    """The per-exchange file read cache, or ``None`` when unavailable.
+
+    Duck-typed off the ``run_context`` the loop injects, so this module keeps no
+    import dependency on the runtime. Absent (direct calls, tests) means caching
+    is simply skipped and every read hits disk.
+    """
+    return getattr((_context or {}).get("run_context"), "read_cache", None)
+
+
+def _invalidate(_context: dict[str, Any] | None, target: Path) -> None:
+    """Drop ``target`` from the read cache after a successful mutation."""
+    cache = _read_cache(_context)
+    if cache is not None:
+        cache.invalidate(str(target))
+
+
 def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
 
@@ -184,7 +201,7 @@ async def _authorize(
     return None
 
 
-def read_file(path: str, base_path: str = "") -> str:
+def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = None) -> str:
     """Read a known file path. Reads agent knowledge, profiles, SOPs, notes.
 
     Prefer this once you know where something lives (from an index or a prior
@@ -194,9 +211,13 @@ def read_file(path: str, base_path: str = "") -> str:
     path -- read that directly instead of issuing a separate search.
 
     Args:
-        path: File path. Relative paths resolve against the knowledge-base root,
-            or against ``base_path``'s directory when provided.
-        base_path: Optional base file/dir for resolving a relative ``path``.
+        path: The file path to read -- absolute, or relative. A relative path
+            resolves against ``base_path`` when given, otherwise against the
+            knowledge-base root.
+        base_path: What a relative ``path`` is relative to. Index files list
+            their entries relative to the index's own location, so when ``path``
+            comes from an index, pass that index's path here. Omit it only for a
+            path that is already relative to the knowledge-base root.
 
     Returns: File contents as text, or an ``Error: ...`` message.
     """
@@ -204,6 +225,13 @@ def read_file(path: str, base_path: str = "") -> str:
         target, _, file_scope = _locate(path, base_path=base_path or None)
         if file_scope.read is False:
             raise PermissionError("Reading is not permitted for this path.")
+        # A file read once this exchange is served from the per-exchange cache,
+        # so a re-read costs no disk I/O. Only successful reads are cached
+        # (below), so a not-found here can still succeed after a later create.
+        cache = _read_cache(_context)
+        key = str(target)
+        if cache is not None and (hit := cache.get(key)) is not None:
+            return hit
         if not target.is_file():
             suggestion = _suggest_paths(Path(path).name)
             hint = f" Did you mean: {suggestion}?" if suggestion else ""
@@ -211,7 +239,10 @@ def read_file(path: str, base_path: str = "") -> str:
         size = target.stat().st_size
         if size > MAX_READ_BYTES:
             raise ValueError(f"File too large ({size} bytes > {MAX_READ_BYTES}): {target}")
-        return target.read_text(encoding="utf-8", errors="replace")
+        content = target.read_text(encoding="utf-8", errors="replace")
+        if cache is not None:
+            cache.put(key, content)
+        return content
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -307,6 +338,7 @@ async def write_file(
             return blocked
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        _invalidate(_context, target)
         return f"Wrote {len(data)} bytes to {target}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
@@ -349,6 +381,7 @@ async def append_file(
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as fh:
             fh.write("\n" + content)
+        _invalidate(_context, target)
         return f"Appended {len(data)} bytes to {target}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
@@ -408,6 +441,7 @@ async def edit_file(
         if blocked:
             return blocked
         target.write_text(updated, encoding="utf-8")
+        _invalidate(_context, target)
         suffix = "s" if replacements != 1 else ""
         return f"Replaced {replacements} occurrence{suffix} in {target}: {old_snippet[:60]!r} → {new_snippet[:60]!r}."
     except _FS_ERRORS as exc:
@@ -447,6 +481,7 @@ async def delete_file(
         if blocked:
             return blocked
         target.rmdir() if is_dir else target.unlink()
+        _invalidate(_context, target)
         return f"Deleted {kind}: {target}."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"

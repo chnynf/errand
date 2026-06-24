@@ -152,13 +152,38 @@ class UsageTracker:
         return "\n".join(lines)
 
 
+class FileReadCache:
+    """Per-exchange cache of file reads, keyed by resolved absolute path.
+
+    Lives on the ``RunContext``, so it spans one user exchange including every
+    delegated sub-agent. The file tools consult it before touching disk, so a
+    file already read this exchange is returned without a second read -- the
+    weak-model re-read loop that dominated scheduled-job cost. Any successful
+    mutation (write/append/edit/delete) invalidates that path's entry, so a
+    later read always sees fresh content.
+    """
+
+    def __init__(self) -> None:
+        self._content: Dict[str, str] = {}
+
+    def get(self, key: str) -> Optional[str]:
+        return self._content.get(key)
+
+    def put(self, key: str, content: str) -> None:
+        self._content[key] = content
+
+    def invalidate(self, key: str) -> None:
+        self._content.pop(key, None)
+
+
 @dataclass
 class RunContext:
     """Cross-cutting state for one exchange, flowing root -> delegated children.
 
     Created by the root ``AgentLoop``; passed unchanged into child loops via
     delegation. Carries only state that is constant for the whole exchange:
-    the shared usage tracker and the origin/destination of the turn.
+    the shared usage tracker, the origin/destination of the turn, and the
+    per-exchange file read cache.
     (Per-loop state like ``delegation_depth`` is NOT here -- it changes per
     loop and stays on the loop.)
     """
@@ -166,6 +191,7 @@ class RunContext:
     usage: UsageTracker
     reply_to: Any = None
     source: Optional[str] = None
+    read_cache: FileReadCache = field(default_factory=FileReadCache)
 
     @classmethod
     def root(cls, *, reply_to: Any = None, source: Optional[str] = None) -> "RunContext":
