@@ -256,11 +256,12 @@ async def write_file(
     scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Create or overwrite a text file in a writable scope.
+    """Create or overwrite a text file.
 
-    Parent directories are created as needed (within the scope roots). Use for
-    new notes/memories or to replace a file wholesale; for small targeted
-    changes to an existing file prefer ``edit_file``.
+    Parent directories are created as needed. Prefer ``edit_file`` for partial
+    changes and ``append_file`` to add at the end; use this for new files or
+    full replacement only.
+    Call at most once per file per turn; put all content in a single write.
 
     Args:
         path: File path inside the scope.
@@ -301,11 +302,11 @@ async def append_file(
     scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Append text to a file; creates it if it does not exist. Never overwrites.
+    """Append text to a file; creates the file if missing. Never overwrites.
 
-    Use for user requests to save, record, capture, add, or remember information
-    in a file. For targeted changes to existing content use ``edit_file``; to
-    replace a file wholesale use ``write_file``.
+    Use for new notes, memories, or log entries. Prefer ``edit_file`` for in-place
+    changes and ``write_file`` to replace a file wholesale.
+    Call at most once per file per turn; combine what you add into one append.
 
     Args:
         path: File path inside the scope.
@@ -349,10 +350,12 @@ async def edit_file(
     replace_all: bool = False,
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Replace text in an existing file (surgical edit).
+    """Replace text in an existing file.
 
-    ``old_string`` must match exactly once unless ``replace_all`` is true.
-    Include enough surrounding context to make the match unique.
+    ``old_string`` must match exactly once unless ``replace_all`` is true;
+    include enough surrounding context to make the match unique.
+    Prefer this over ``write_file`` for partial changes.
+    Call at most once per file per turn; combine multiple edits into one call.
 
     Args:
         path: File path inside the scope.
@@ -406,7 +409,7 @@ async def delete_file(
     scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Delete a file or an empty directory in a writable scope.
+    """Delete a file or an empty directory.
 
     Non-empty directories and scope roots are refused.
 
