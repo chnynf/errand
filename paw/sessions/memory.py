@@ -269,7 +269,7 @@ class Memory:
 
         - Required: ``tool_call_id``, ``name``, ``content_chars``, ``params``.
         - Optional, checked in priority order: ``error`` > ``preview`` >
-          ``result_ref`` (with ``type``/``scope``/``path``) > ``entry_count``.
+          ``result_ref`` (with ``type``/``path``) > ``entry_count``.
           When none are present the renderer falls back to a chars summary.
         """
         if record.get("error"):
@@ -277,10 +277,9 @@ class Memory:
         if record.get("preview"):
             return str(record["preview"])
         if ref := record.get("result_ref"):
-            scope = ref.get("scope", "kb")
             path = ref.get("path", "")
             chars = record.get("content_chars", 0)
-            return f"{record['name']}: result stored as {ref['type']} ref {scope}:{path} ({chars} chars)"
+            return f"{record['name']}: result stored as {ref['type']} ref {path} ({chars} chars)"
         if "entry_count" in record:
             return f"{record['name']}: {record['entry_count']} entries"
         return f"{record['name']}: {record.get('content_chars', 0)} chars"

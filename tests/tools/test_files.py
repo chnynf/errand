@@ -71,8 +71,37 @@ def test_read_rejects_absolute_path_outside_root(kb: Path, tmp_path: Path):
     assert ft.read_file(str(outside)).startswith("Error:")
 
 
-def test_unknown_scope_is_reported(kb: Path):
-    assert "Unknown file scope" in ft.read_file("INDEX.md", scope="nope")
+def test_path_outside_all_roots_is_rejected(kb: Path, tmp_path: Path):
+    outside = tmp_path / "elsewhere" / "secret.md"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("nope", encoding="utf-8")
+    result = ft.read_file(str(outside))
+    assert "outside all allowed locations" in result
+
+
+def test_most_specific_scope_governs_permissions(tmp_path: Path, monkeypatch):
+    # Nested zones: outer 'kb' forbids append, inner 'notes' allows it. A path
+    # under notes/ must be governed by the inner (more specific) zone.
+    root = tmp_path / "kb"
+    (root / "notes").mkdir(parents=True)
+    config = PawConfig(
+        file_access=FileAccessConfig(
+            default_scope="kb",
+            scopes={
+                "kb": FileScope(roots=[str(root)], append=False),
+                "notes": FileScope(roots=[str(root / "notes")], append=True),
+            },
+        )
+    )
+    monkeypatch.setattr(ft, "load_paw_config", lambda: config)
+    import asyncio
+
+    # Under notes/ -> inner zone allows append.
+    out = asyncio.run(ft.append_file("notes/a.md", "hi"))
+    assert out.startswith("Appended")
+    # At the kb root -> outer zone forbids append.
+    blocked = asyncio.run(ft.append_file("top.md", "hi"))
+    assert "not permitted" in blocked
 
 
 def test_read_disabled_scope_rejected(tmp_path: Path, monkeypatch):
@@ -251,8 +280,8 @@ async def test_delete_non_empty_dir_rejected(kb: Path):
     assert (kb / "notes").exists()
 
 
-async def test_delete_scope_root_rejected(kb: Path):
-    assert "scope root" in await ft.delete_file("")
+async def test_delete_protected_root_rejected(kb: Path):
+    assert "protected root" in await ft.delete_file("")
 
 
 # --- search --------------------------------------------------------------------
@@ -397,7 +426,7 @@ def test_memory_strips_large_write_payload():
     call = ToolCall(
         id="tc-1",
         name="write_file",
-        params={"path": "notes/big.md", "scope": "kb", "content": "x" * 10000},
+        params={"path": "notes/big.md", "content": "x" * 10000},
     )
     result = ToolResult(
         tool_call_id="tc-1",
@@ -406,5 +435,5 @@ def test_memory_strips_large_write_payload():
     )
     record = ToolRegistry().compact_result(call, result)
     assert "content" not in record["params"]
-    assert record["result_ref"] == {"type": "file", "scope": "kb", "path": "notes/big.md"}
+    assert record["result_ref"] == {"type": "file", "path": "notes/big.md"}
     assert record["content_chars"] == len(result.content)

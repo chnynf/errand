@@ -31,7 +31,7 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from paw.config import FileScope, load_paw_config
 
@@ -47,31 +47,38 @@ def _expand(path: str | Path) -> Path:
     return Path(os.path.expanduser(str(path))).resolve()
 
 
-def _within_roots(target: Path, roots: Iterable[Path]) -> bool:
-    target = target.resolve()
-    for root in roots:
-        try:
-            target.relative_to(root.resolve())
-            return True
-        except ValueError:
-            continue
-    return False
+def _scope_roots() -> list[tuple[str, FileScope, Path]]:
+    """All configured permission zones as ``(name, scope, resolved_root)``.
 
-
-def _scope(scope: str | None) -> tuple[str, FileScope, list[Path]]:
+    Scopes are concentric (e.g. ``review`` ⊂ ``notes`` ⊂ ``kb``). Sorted by
+    root-path length descending so the FIRST entry containing a target is the
+    *most specific* zone -- the one whose per-operation permissions govern it.
+    """
     config = load_paw_config().file_access
-    name = scope or config.default_scope
-    file_scope = config.scopes.get(name)
-    if file_scope is None:
-        available = ", ".join(sorted(config.scopes)) or "(none)"
-        raise ValueError(f"Unknown file scope '{name}'. Available scopes: {available}")
-    roots = [_expand(root) for root in file_scope.roots]
-    if not roots:
-        raise ValueError(f"File scope '{name}' has no configured roots.")
-    return name, file_scope, roots
+    entries: list[tuple[str, FileScope, Path]] = []
+    for name, scope in config.scopes.items():
+        for root in scope.roots:
+            entries.append((name, scope, _expand(root)))
+    entries.sort(key=lambda e: len(str(e[2])), reverse=True)
+    return entries
 
 
-def _resolve(path: str, roots: list[Path], *, base_path: str | None = None) -> Path:
+def _base_root() -> Path:
+    """Root that bare relative paths resolve against (the default scope's root).
+
+    This is the broad outer zone; everything the model can touch lives under it,
+    so the model only ever needs paths relative to this single root and never
+    names a scope.
+    """
+    config = load_paw_config().file_access
+    default = config.scopes.get(config.default_scope)
+    if default is None or not default.roots:
+        raise ValueError("No default file scope with a root is configured.")
+    return _expand(default.roots[0])
+
+
+def _resolve(path: str, *, base_path: str | None = None) -> Path:
+    base_root = _base_root()
     raw = Path(os.path.expanduser(path))
     if raw.is_absolute():
         return raw.resolve()
@@ -80,46 +87,56 @@ def _resolve(path: str, roots: list[Path], *, base_path: str | None = None) -> P
         base_target = (
             base_raw.resolve()
             if base_raw.is_absolute()
-            else (roots[0] / base_raw).resolve()
+            else (base_root / base_raw).resolve()
         )
         base_dir = base_target if base_target.is_dir() else base_target.parent
         return (base_dir / raw).resolve()
-    return (roots[0] / raw).resolve()
+    return (base_root / raw).resolve()
 
 
-def _located(path: str, roots: list[Path], scope_name: str, *, base_path: str | None = None) -> Path:
-    target = _resolve(path, roots, base_path=base_path)
-    if not _within_roots(target, roots):
-        raise PermissionError(f"Path not within file scope '{scope_name}': {target}")
-    return target
+def _locate(path: str, *, base_path: str | None = None) -> tuple[Path, str, FileScope]:
+    """Resolve ``path`` and return ``(target, scope_name, governing_scope)``.
+
+    The governing scope is the most specific configured zone containing the
+    target; its per-operation permissions are what the caller enforces. A path
+    outside every zone is rejected here, so the model can never reach -- or even
+    perceive -- anything beyond the allowed roots.
+    """
+    target = _resolve(path, base_path=base_path)
+    for name, scope, root in _scope_roots():
+        try:
+            target.relative_to(root)
+            return target, name, scope
+        except ValueError:
+            continue
+    raise PermissionError(f"Path is outside all allowed locations: {target}")
 
 
 def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
 
 
-def _suggest_paths(name: str, roots: list[Path], limit: int = 5) -> str:
-    """Find files anywhere under ``roots`` whose basename matches ``name``.
+def _suggest_paths(name: str, limit: int = 5) -> str:
+    """Find files under the base root whose basename matches ``name``.
 
-    Used to turn a not-found ``read_file`` into a self-correcting error: the
-    model often guesses the wrong relative prefix or scope (e.g. ``sops/x.md``
-    when the file lives at ``generalist/sops/x.md``), so we point it straight at
-    the real scope-relative path instead of forcing a separate ``find_files``
-    round-trip. Returns a comma-separated list of scope-relative paths, or "".
+    Turns a not-found ``read_file`` into a self-correcting error: the model
+    often guesses the wrong relative prefix (e.g. ``sops/x.md`` when the file is
+    at ``generalist/sops/x.md``), so we point it straight at the real path
+    instead of forcing a separate ``find_files`` round-trip. Returns a
+    comma-separated list of base-root-relative paths, or "".
     """
     if not name:
         return ""
+    root = _base_root()
+    if not root.is_dir():
+        return ""
     found: list[str] = []
-    for root in roots:
-        root = root.resolve()
-        if not root.is_dir():
-            continue
-        for entry in root.rglob(name):
-            rel = entry.relative_to(root)
-            if entry.is_file() and not any(part.startswith(".") for part in rel.parts):
-                found.append(str(rel).replace("\\", "/"))
-                if len(found) >= limit:
-                    return ", ".join(found)
+    for entry in root.rglob(name):
+        rel = entry.relative_to(root)
+        if entry.is_file() and not any(part.startswith(".") for part in rel.parts):
+            found.append(str(rel).replace("\\", "/"))
+            if len(found) >= limit:
+                break
     return ", ".join(found)
 
 
@@ -148,16 +165,17 @@ async def _authorize(
     if perm is True:
         return None
     if perm is False:
-        return f"Error: '{operation}' is not permitted in file scope '{scope_name}'."
+        return f"Error: '{operation}' is not permitted for this path."
 
     reply_to = (context or {}).get("reply_to")
     if reply_to is None or not hasattr(reply_to, "request_approval"):
         return (
-            f"Error: scope '{scope_name}' requires approval to {operation}, "
+            f"Error: '{operation}' requires approval, "
             "but no approval channel is available."
         )
+    # The approval prompt is human-facing, so the internal zone name is fine here.
     approved = await reply_to.request_approval(
-        title=f"File {operation} in scope '{scope_name}'",
+        title=f"File {operation} (zone '{scope_name}')",
         details=detail,
         timeout_seconds=300,
     )
@@ -166,54 +184,29 @@ async def _authorize(
     return None
 
 
-def _scope_locations() -> str:
-    """Render the file scopes as a compact location list for the system prompt.
-
-    A scope is a named set of directories the file tools may touch; the model
-    passes a scope name to each file tool. Only names and roots are surfaced --
-    a routing hint so the model can pick the right scope. Per-operation
-    permissions are intentionally omitted: the harness enforces run/approve/deny
-    at call time, so the model never needs them in advance. Leading ``_`` keeps
-    this out of the auto-discovered tool set.
-    """
-    file_access = load_paw_config().file_access
-    if not file_access.scopes:
-        return ""
-    lines = [
-        "FILE SCOPES (locations the file tools can access; pass `scope`, "
-        f"default {file_access.default_scope}):"
-    ]
-    for name, scope in sorted(file_access.scopes.items()):
-        lines.append(f"- {name}: {', '.join(scope.roots)}")
-    return "\n".join(lines)
-
-
-def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
+def read_file(path: str, base_path: str = "") -> str:
     """Read a known file path. Reads agent knowledge, profiles, SOPs, notes.
 
     Prefer this once you know where something lives (from an index or a prior
     search) instead of browsing for it. Reads one file; when you need several,
     issue multiple read_file calls in a single round (the runtime runs them
-    concurrently). For knowledge-base work use the default ``kb`` scope. If a
-    read comes back not-found, the error suggests the real scope-relative path
-    -- read that directly instead of issuing a separate search.
+    concurrently). If a read comes back not-found, the error suggests the real
+    path -- read that directly instead of issuing a separate search.
 
     Args:
-        path: File path inside the scope. Relative paths resolve against the
-            scope root, or against ``base_path``'s directory when provided.
-        scope: Configured file scope. Defaults to ``kb``.
-        base_path: Optional base file/dir (same scope) for resolving relatives.
+        path: File path. Relative paths resolve against the knowledge-base root,
+            or against ``base_path``'s directory when provided.
+        base_path: Optional base file/dir for resolving a relative ``path``.
 
     Returns: File contents as text, or an ``Error: ...`` message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
+        target, _, file_scope = _locate(path, base_path=base_path or None)
         if file_scope.read is False:
-            raise PermissionError(f"'read' is not permitted in file scope '{name}'.")
-        target = _located(path, roots, name, base_path=base_path or None)
+            raise PermissionError("Reading is not permitted for this path.")
         if not target.is_file():
-            suggestion = _suggest_paths(Path(path).name, roots)
-            hint = f" Did you mean (scope '{name}'): {suggestion}?" if suggestion else ""
+            suggestion = _suggest_paths(Path(path).name)
+            hint = f" Did you mean: {suggestion}?" if suggestion else ""
             return f"Error: Not a file: {target}.{hint}"
         size = target.stat().st_size
         if size > MAX_READ_BYTES:
@@ -223,28 +216,26 @@ def read_file(path: str, scope: str = "kb", base_path: str = "") -> str:
         return f"Error: {exc}"
 
 
-def list_dir(path: str = "", scope: str = "kb", base_path: str = "", depth: int = 1) -> str:
-    """List directory entries from a file scope; one level, or a deeper tree.
+def list_dir(path: str = "", base_path: str = "", depth: int = 1) -> str:
+    """List directory entries; one level, or a deeper tree.
 
-    Use to orient within a scope. To see a whole subtree, call once with a
-    larger ``depth`` rather than many single-level lists. To locate files by
-    name use ``find_files``; to find content use ``grep_files``. Directories
-    are suffixed with ``/``; dotfiles are hidden.
+    Use to orient yourself. To see a whole subtree, call once with a larger
+    ``depth`` rather than many single-level lists. To locate files by name use
+    ``find_files``; to find content use ``grep_files``. Directories are suffixed
+    with ``/``; dotfiles are hidden.
 
     Args:
-        path: Directory path inside the scope. Empty lists the scope root.
-        scope: Configured file scope. Defaults to ``kb``.
-        base_path: Optional base file/dir (same scope) for resolving relatives.
+        path: Directory path. Empty lists the knowledge-base root.
+        base_path: Optional base file/dir for resolving a relative ``path``.
         depth: Levels to descend. 1 (default) lists only the immediate entries;
             higher values return an indented tree of nested entries.
 
     Returns: Entries (indented tree when depth > 1), or an ``Error: ...`` message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
+        target, _, file_scope = _locate(path or ".", base_path=base_path or None)
         if file_scope.list is False:
-            raise PermissionError(f"'list' is not permitted in file scope '{name}'.")
-        target = _located(path, roots, name, base_path=base_path or None) if path else roots[0]
+            raise PermissionError("Listing is not permitted for this path.")
         if not target.is_dir():
             raise NotADirectoryError(f"Not a directory: {target}")
 
@@ -282,7 +273,6 @@ def list_dir(path: str = "", scope: str = "kb", base_path: str = "", depth: int 
 async def write_file(
     path: str,
     content: str,
-    scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
     """Create or overwrite a text file.
@@ -294,15 +284,13 @@ async def write_file(
     The returned status line confirms the write -- do not re-read to verify.
 
     Args:
-        path: File path inside the scope.
+        path: File path. Relative paths resolve against the knowledge-base root.
         content: Full UTF-8 text to write.
-        scope: Configured file scope. Defaults to ``kb``.
 
     Returns: A status line, or an ``Error: ...`` / not-approved message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
-        target = _located(path, roots, name)
+        target, name, file_scope = _locate(path)
         if target.is_dir():
             raise IsADirectoryError(f"Path is a directory: {target}")
         data = content.encode("utf-8")
@@ -313,12 +301,10 @@ async def write_file(
             file_scope, name, _context,
             op_key="write",
             operation=f"{action} file",
-            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
+            detail=f"Path: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
         )
         if blocked:
             return blocked
-        if not _within_roots(target.parent, roots):
-            raise PermissionError(f"Parent directory not within file scope '{name}': {target.parent}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return f"Wrote {len(data)} bytes to {target}."
@@ -329,7 +315,6 @@ async def write_file(
 async def append_file(
     path: str,
     content: str,
-    scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
     """Append text to a file; creates the file if missing. Never overwrites.
@@ -341,31 +326,26 @@ async def append_file(
     the file afterward to verify.
 
     Args:
-        path: File path inside the scope.
+        path: File path. Relative paths resolve against the knowledge-base root.
         content: UTF-8 text to append.
-        scope: Configured file scope. Defaults to ``kb``.
 
     Returns: A status line, or an ``Error: ...`` / not-approved message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
-        target = _located(path, roots, name)
+        target, name, file_scope = _locate(path)
         if target.is_dir():
             raise IsADirectoryError(f"Path is a directory: {target}")
         data = content.encode("utf-8")
         if len(data) > MAX_WRITE_BYTES:
             raise ValueError(f"Content too large ({len(data)} bytes > {MAX_WRITE_BYTES}).")
-        action = "append to" if target.exists() else "create and append to"
         blocked = await _authorize(
             file_scope, name, _context,
             op_key="append",
             operation="append to file",
-            detail=f"Scope: {name}\nPath: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
+            detail=f"Path: {target}\nBytes: {len(data)}\nPreview: {_preview(content)}",
         )
         if blocked:
             return blocked
-        if not _within_roots(target.parent, roots):
-            raise PermissionError(f"Parent directory not within file scope '{name}': {target.parent}")
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as fh:
             fh.write("\n" + content)
@@ -378,7 +358,6 @@ async def edit_file(
     path: str,
     old_string: str,
     new_string: str,
-    scope: str = "kb",
     replace_all: bool = False,
     _context: dict[str, Any] | None = None,
 ) -> str:
@@ -391,10 +370,9 @@ async def edit_file(
     The returned status line confirms the change -- do not re-read to verify.
 
     Args:
-        path: File path inside the scope.
+        path: File path. Relative paths resolve against the knowledge-base root.
         old_string: Exact text to find.
         new_string: Replacement text.
-        scope: Configured file scope. Defaults to ``kb``.
         replace_all: Replace every occurrence instead of requiring uniqueness.
 
     Returns: A status line, or an ``Error: ...`` / not-approved message.
@@ -402,8 +380,7 @@ async def edit_file(
     try:
         if not old_string:
             return "Error: old_string must not be empty."
-        name, file_scope, roots = _scope(scope)
-        target = _located(path, roots, name)
+        target, name, file_scope = _locate(path)
         if not target.is_file():
             raise FileNotFoundError(f"Not a file: {target}")
         original = target.read_text(encoding="utf-8", errors="replace")
@@ -424,7 +401,7 @@ async def edit_file(
             op_key="edit",
             operation="edit file",
             detail=(
-                f"Scope: {name}\nPath: {target}\nReplacements: {replacements}\n"
+                f"Path: {target}\nReplacements: {replacements}\n"
                 f"From: {old_snippet}\nTo:   {new_snippet}"
             ),
         )
@@ -439,26 +416,24 @@ async def edit_file(
 
 async def delete_file(
     path: str,
-    scope: str = "kb",
     _context: dict[str, Any] | None = None,
 ) -> str:
     """Delete a file or an empty directory.
 
-    Non-empty directories and scope roots are refused.
+    Non-empty directories and the knowledge-base roots themselves are refused.
 
     Args:
-        path: File or empty-directory path inside the scope.
-        scope: Configured file scope. Defaults to ``kb``.
+        path: File or empty-directory path. Relative paths resolve against the
+            knowledge-base root.
 
     Returns: A status line, or an ``Error: ...`` / not-approved message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
-        target = _located(path, roots, name)
+        target, name, file_scope = _locate(path)
         if not target.exists():
             raise FileNotFoundError(f"Path does not exist: {target}")
-        if any(target == root for root in roots):
-            raise PermissionError(f"Refusing to delete a scope root: {target}")
+        if any(target == root for _, _, root in _scope_roots()):
+            raise PermissionError(f"Refusing to delete a protected root: {target}")
         is_dir = target.is_dir()
         if is_dir and any(target.iterdir()):
             raise OSError(f"Directory not empty: {target}")
@@ -467,7 +442,7 @@ async def delete_file(
             file_scope, name, _context,
             op_key="delete",
             operation=f"delete {kind}",
-            detail=f"Scope: {name}\nPath: {target}",
+            detail=f"Path: {target}",
         )
         if blocked:
             return blocked
@@ -477,8 +452,8 @@ async def delete_file(
         return f"Error: {exc}"
 
 
-def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*") -> str:
-    """Search file contents by regex within a scope (recursive).
+def grep_files(pattern: str, path: str = "", glob: str = "*") -> str:
+    """Search file contents by regex (recursive).
 
     Use to find where something is recorded (a past memory, a decision). One
     well-chosen pattern usually locates it in a single call -- prefer that over
@@ -486,21 +461,19 @@ def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*")
 
     Args:
         pattern: Python regular expression to search for.
-        scope: Configured file scope. Defaults to ``kb``.
-        path: Subdirectory to search under. Empty searches the scope root.
+        path: Subdirectory to search under. Empty searches the knowledge-base root.
         glob: Filename glob to restrict which files are scanned (e.g. ``*.md``).
 
     Returns: Matching ``relpath:line:text`` lines, or an ``Error: ...`` message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
-        if file_scope.read is False:
-            raise PermissionError(f"'read' is not permitted in file scope '{name}'.")
         try:
             regex = re.compile(pattern)
         except re.error as exc:
             return f"Error: invalid regex pattern: {exc}"
-        base = _located(path, roots, name) if path else roots[0]
+        base, _, file_scope = _locate(path or ".")
+        if file_scope.read is False:
+            raise PermissionError("Reading is not permitted for this path.")
         if not base.is_dir():
             raise NotADirectoryError(f"Not a directory: {base}")
 
@@ -539,24 +512,22 @@ def grep_files(pattern: str, scope: str = "kb", path: str = "", glob: str = "*")
         return f"Error: {exc}"
 
 
-def find_files(glob_pattern: str, scope: str = "kb", path: str = "") -> str:
-    """Find files and directories by name glob within a scope (recursive).
+def find_files(glob_pattern: str, path: str = "") -> str:
+    """Find files and directories by name glob (recursive).
 
     Use to locate files by name, or to see a subtree's layout, in one call
     instead of repeated single-level list_dir calls.
 
     Args:
         glob_pattern: Glob to match against paths, e.g. ``*.md`` or ``**/*.py``.
-        scope: Configured file scope. Defaults to ``kb``.
-        path: Subdirectory to search under. Empty searches the scope root.
+        path: Subdirectory to search under. Empty searches the knowledge-base root.
 
     Returns: Newline-separated relative paths, or an ``Error: ...`` message.
     """
     try:
-        name, file_scope, roots = _scope(scope)
+        base, _, file_scope = _locate(path or ".")
         if file_scope.list is False:
-            raise PermissionError(f"'list' is not permitted in file scope '{name}'.")
-        base = _located(path, roots, name) if path else roots[0]
+            raise PermissionError("Listing is not permitted for this path.")
         if not base.is_dir():
             raise NotADirectoryError(f"Not a directory: {base}")
 
@@ -596,7 +567,7 @@ _WRITE_PAYLOAD_KEYS = ("content", "old_string", "new_string")
 
 
 def _file_ref(params: dict, kind: str, default_path: Any = None) -> dict:
-    return {"type": kind, "scope": params.get("scope", "kb"), "path": params.get("path", default_path)}
+    return {"type": kind, "path": params.get("path", default_path)}
 
 
 def _is_error(content: str) -> bool:

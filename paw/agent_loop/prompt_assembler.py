@@ -201,6 +201,8 @@ class PromptAssembler:
             f"--- BEGIN PROMPT RESOURCE: {name} ---",
             f"Logical path: {logical_path}",
             f"Base path: {base_path}",
+            "Already loaded here -- do not read_file it again; only the leaf "
+            "files it links to.",
             "",
         ]
         footer = ["", f"--- END PROMPT RESOURCE: {name} ---"]

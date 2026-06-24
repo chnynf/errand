@@ -134,60 +134,6 @@ def test_tool_summary_lists_catalog_and_nudges(tools_dir: Path):
     assert "Think before calling" in summary
 
 
-def test_scope_locations_in_manual_not_summary(tmp_path: Path, monkeypatch):
-    """File-tool scopes live in the tool manual, not the high-level summary.
-
-    Scopes are rendered as locations only -- no permission matrix exposed.
-    """
-    from paw.config import PawConfig, FileAccessConfig, FileScope
-    import paw.tools.files as ft
-
-    cfg = PawConfig(
-        file_access=FileAccessConfig(
-            default_scope="kb",
-            scopes={
-                "kb": FileScope(roots=["~/Documents/kb"]),
-                "notes": FileScope(roots=["~/Documents/kb/notes"], write="ask"),
-            },
-        )
-    )
-    monkeypatch.setattr(ft, "load_paw_config", lambda: cfg)
-
-    # A tools dir with one scoped (file-like) tool and one unscoped tool.
-    d = tmp_path / "tools"
-    d.mkdir()
-    (d / "__init__.py").write_text("", encoding="utf-8")
-    (d / "fs.py").write_text(
-        dedent(
-            '''
-            def grab(path: str, scope: str = "kb") -> str:
-                """Read a file from a scope."""
-                return path
-
-            def ping() -> str:
-                """Unscoped tool."""
-                return "ok"
-            '''
-        ),
-        encoding="utf-8",
-    )
-    registry = ToolRegistry(tools_dir=d)
-
-    summary = registry.tool_summary()
-    assert "FILE SCOPES" not in summary  # not in the high-level summary anymore
-
-    scoped_manual = registry.manual("grab")
-    assert "FILE SCOPES (locations the file tools can access; pass `scope`, default kb):" in scoped_manual
-    assert "- kb: ~/Documents/kb" in scoped_manual
-    assert "- notes: ~/Documents/kb/notes" in scoped_manual
-    # Permission values stay out of the prompt; the harness enforces them.
-    assert "write=ask" not in scoped_manual
-    assert "ops=" not in scoped_manual
-
-    # Unscoped tools get no scope block.
-    assert "FILE SCOPES" not in registry.manual("ping")
-
-
 def test_execute_sync_and_async_tools(tools_dir: Path):
     registry = ToolRegistry(tools_dir=tools_dir)
     assert asyncio.run(registry.execute("add", {"a": 2, "b": 3})) == 5
@@ -233,7 +179,7 @@ def test_compact_result_uses_registered_compactor_for_file_tools():
     call = ToolCall(
         id="tc-1",
         name="write_file",
-        params={"path": "notes/big.md", "scope": "kb", "content": "y" * 5000},
+        params={"path": "notes/big.md", "content": "y" * 5000},
     )
     result = ToolResult(
         tool_call_id="tc-1",
@@ -246,7 +192,7 @@ def test_compact_result_uses_registered_compactor_for_file_tools():
     # Per-tool compactor strips the large payload from persisted params.
     assert "content" not in record["params"]
     assert record["params"]["path"] == "notes/big.md"
-    assert record["result_ref"] == {"type": "file", "scope": "kb", "path": "notes/big.md"}
+    assert record["result_ref"] == {"type": "file", "path": "notes/big.md"}
     assert record["content_chars"] == len(result.content)
     # Memory must be able to render this record without knowing the tool name.
     rendered = _record_renders(record)
@@ -255,7 +201,7 @@ def test_compact_result_uses_registered_compactor_for_file_tools():
 
 def test_compact_result_read_file_error_surfaces_in_record():
     registry = ToolRegistry()
-    call = ToolCall(id="tc-2", name="read_file", params={"path": "missing.md", "scope": "kb"})
+    call = ToolCall(id="tc-2", name="read_file", params={"path": "missing.md"})
     result = ToolResult(
         tool_call_id="tc-2", name="read_file", content="Error: Not a file: /kb/missing.md"
     )
@@ -270,7 +216,7 @@ def test_compact_result_read_file_error_surfaces_in_record():
 
 def test_compact_result_list_dir_counts_entries():
     registry = ToolRegistry()
-    call = ToolCall(id="tc-3", name="list_dir", params={"path": "", "scope": "kb"})
+    call = ToolCall(id="tc-3", name="list_dir", params={"path": ""})
     result = ToolResult(
         tool_call_id="tc-3", name="list_dir", content="a.md\nb.md\n\nc.md/\n"
     )
@@ -278,7 +224,7 @@ def test_compact_result_list_dir_counts_entries():
     record = registry.compact_result(call, result)
 
     assert record["entry_count"] == 3
-    assert record["result_ref"] == {"type": "directory", "scope": "kb", "path": ""}
+    assert record["result_ref"] == {"type": "directory", "path": ""}
     # When result_ref is present the renderer prefers it (matches old behavior).
     assert "directory ref" in _record_renders(record)
 

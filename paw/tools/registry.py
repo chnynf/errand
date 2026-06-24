@@ -39,9 +39,9 @@ TOOLS_DIR = Path(__file__).resolve().parent
 _SKIP_MODULES = {"__init__", "registry"}
 
 # Cross-tool decisioning guidance, authored by the tools component and surfaced
-# as a dedicated block in the system prompt next to the file-tool scopes. These
-# are nudges that apply across tools (not to any single one), so they live here
-# rather than in individual tool descriptions or general runtime prose.
+# as a dedicated block in the system prompt. These are nudges that apply across
+# tools (not to any single one), so they live here rather than in individual
+# tool descriptions or general runtime prose.
 TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
     "- Think before calling. Reach for a tool only when it's definitely necessary.\n"
@@ -278,22 +278,10 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def manual(self, name: str) -> str:
-        """Full usage docs (signature + docstring) for one tool.
-
-        For scoped file tools (those taking a ``scope`` argument) the available
-        scope locations are appended, since they come from config rather than
-        the static docstring.
-        """
+        """Full usage docs (signature + docstring) for one tool."""
         for desc in self._descriptions:
             if desc["name"] == name:
-                doc = f"{name}{desc['signature']}\n\n{desc['doc']}"
-                if "scope" in self._public_params(name):
-                    from paw.tools.files import _scope_locations
-
-                    scopes = _scope_locations()
-                    if scopes:
-                        doc += f"\n\n{scopes}"
-                return doc
+                return f"{name}{desc['signature']}\n\n{desc['doc']}"
         return f"Error: unknown tool '{name}'."
 
     async def execute(
@@ -367,8 +355,7 @@ class ToolRegistry:
         The single contribution of the tools component to the system prompt: the
         core tools are exposed directly as functions (your tool list); every
         catalog tool below is invoked via ``call_tool(name, args)``, with
-        ``tool_manual(name)`` for full usage on demand (file tools' scope
-        locations are appended there, not here).
+        ``tool_manual(name)`` for full usage on demand.
         """
         return (
             "TOOLS:\n"

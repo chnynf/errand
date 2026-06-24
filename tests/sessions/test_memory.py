@@ -26,14 +26,14 @@ def test_history_messages_use_roles_without_persisted_file_contents(
                 {
                     "id": "tc-1",
                     "name": "read_file",
-                    "params": {"path": "INDEX.md", "scope": "kb"},
+                    "params": {"path": "INDEX.md"},
                 }
             ],
             "text_response": None,
         },
     )
     registry = ToolRegistry()
-    call = ToolCall(id="tc-1", name="read_file", params={"path": "INDEX.md", "scope": "kb"})
+    call = ToolCall(id="tc-1", name="read_file", params={"path": "INDEX.md"})
     result = ToolResult(
         tool_call_id="tc-1", name="read_file", content="# Agent KB\nsecret soul"
     )
@@ -56,7 +56,7 @@ def test_history_messages_use_roles_without_persisted_file_contents(
     assert messages[1]["tool_calls"][0]["function"]["name"] == "read_file"
     assert messages[2]["role"] == "tool"
     assert messages[2]["tool_call_id"] == "tc-1"
-    assert "kb:INDEX.md" in messages[2]["content"]
+    assert "ref INDEX.md" in messages[2]["content"]
     assert "# Agent KB" not in messages[2]["content"]
     assert "secret soul" not in messages[2]["content"]
     assert messages[3] == {"role": "assistant", "content": "I loaded the profile."}
@@ -65,7 +65,6 @@ def test_history_messages_use_roles_without_persisted_file_contents(
     stored_result = tool_entry["content"][0]
     assert stored_result["result_ref"] == {
         "type": "file",
-        "scope": "kb",
         "path": "INDEX.md",
     }
     assert "secret soul" not in str(stored_result)
