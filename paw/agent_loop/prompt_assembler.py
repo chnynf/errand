@@ -122,6 +122,21 @@ class PromptAssembler:
             parts.append(f"INSTRUCTION:\n{instruction}")
         return [{"role": "user", "content": "\n\n".join(parts)}]
 
+    def build_prefix_messages(self, history_messages: list[dict]) -> list[dict]:
+        """Return the stable, append-only prefix: system prompt + history.
+
+        This is the portion that must stay byte-identical across calls to remain
+        prefix-cacheable. The loop appends each tool round to this list and keeps
+        the volatile per-turn context (see ``build_context_messages``) OUT of it,
+        re-appending that context as the final message on every model call. That
+        way the prefix grows monotonically -- within a turn and across turns --
+        instead of being broken by a volatile block wedged into its middle.
+        """
+        return [
+            {"role": "system", "content": self.build_system_prompt()},
+            *history_messages,
+        ]
+
     def build_messages(
         self,
         history_messages: list[dict],
@@ -144,8 +159,7 @@ class PromptAssembler:
         whole growing history is re-billed fresh on every call.
         """
         return [
-            {"role": "system", "content": self.build_system_prompt()},
-            *history_messages,
+            *self.build_prefix_messages(history_messages),
             *self.build_context_messages(
                 context_summary=context_summary,
                 session_note=session_note,

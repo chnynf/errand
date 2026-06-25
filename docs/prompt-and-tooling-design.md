@@ -5,6 +5,11 @@ how Paw assembles system prompts and exposes tools. Read this before changing
 `agent.md`, the prompt assembler, the tool registry, or the file tools — the
 *why* here is easy to accidentally undo.
 
+> Companion doc: [`context-history-and-caching-design.md`](./context-history-and-caching-design.md)
+> covers per-call context assembly, history persistence/compaction, prompt
+> caching (the CTX-at-tail rule), reasoning-content replay, and scheduled-job
+> session resets.
+
 ## Principles
 
 - **Token efficiency is a first-class concern.** Almost every token of a "simple

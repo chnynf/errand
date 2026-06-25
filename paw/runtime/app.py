@@ -191,7 +191,21 @@ class PawApp:
         await self.session_manager.archive(session_id, start_new=start_new)
 
     async def process_scheduled_job(self, session_id: str, text: str, name: str) -> str:
-        """Run a scheduled job prompt through its own session."""
+        """Run a scheduled job prompt through a fresh session.
+
+        Each fire archives the prior run (and any interactive follow-ups that
+        landed in the same channel) and starts clean -- the internal equivalent
+        of a ``/new`` before the task. A scheduled job's durable state lives in
+        the files it edits, not in the chat transcript, so carrying the previous
+        run's history forward only re-bills those tokens on every fire (and
+        across a multi-hour gap it isn't even cache-warm). Archiving keeps the
+        record on disk while giving the model a minimal, fresh prompt.
+        """
+        await self.session_manager.archive(
+            session_id,
+            start_new=True,
+            agent_id=self.config.default_agent,
+        )
         return await self.session_manager.process(
             session_id,
             text,

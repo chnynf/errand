@@ -1,6 +1,7 @@
 """In-loop compaction checkpoint behavior for AgentLoop.process_input."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from paw.agent_loop.loop import (
     AgentLoop,
@@ -41,9 +42,11 @@ class _FakeRegistry:
 
 
 class _FakePromptAssembler:
-    def build_messages(self, history, *, context_summary=None, session_note=None, instruction=None):
-        return [{"role": "system", "content": "sys"},
-                {"role": "user", "content": f"CTX:{context_summary}"}, *history]
+    def build_prefix_messages(self, history):
+        return [{"role": "system", "content": "sys"}, *history]
+
+    def build_context_messages(self, *, context_summary=None, session_note=None, instruction=None):
+        return [{"role": "user", "content": f"CTX:{context_summary}"}]
 
 
 class _FakeBrain:
@@ -74,6 +77,7 @@ def _make_loop(monkeypatch, tmp_path, payload):
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     loop = object.__new__(AgentLoop)
     loop.debug = False
+    loop.config = SimpleNamespace(models={})
     loop.agent_id = "test"
     loop.agent_spec = _Spec()
     loop.delegation_depth = 0

@@ -2,6 +2,7 @@
 run's usage tracker and surfaced in the footer."""
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from paw.agent_loop.loop import AgentLoop
 from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
@@ -37,8 +38,11 @@ class _Registry:
 
 
 class _PromptAssembler:
-    def build_messages(self, history, *, context_summary=None, session_note=None, instruction=None):
+    def build_prefix_messages(self, history):
         return [{"role": "system", "content": "s"}, *history]
+
+    def build_context_messages(self, *, context_summary=None, session_note=None, instruction=None):
+        return [{"role": "user", "content": f"CTX:{instruction}"}]
 
 
 class _Brain:
@@ -62,6 +66,7 @@ def _make_loop(monkeypatch, tmp_path):
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     loop = object.__new__(AgentLoop)
     loop.debug = False
+    loop.config = SimpleNamespace(models={})
     loop.agent_id = "test"
     loop.agent_spec = _Spec()
     loop.delegation_depth = 0

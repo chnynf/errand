@@ -136,6 +136,33 @@ async def test_reset_command_archives_and_replies_without_model() -> None:
     assert reply.messages == [NEW_SESSION_MESSAGE]
 
 
+async def test_scheduled_job_archives_then_runs_in_fresh_session() -> None:
+    """Each scheduled fire starts clean: archive (start_new) before processing,
+    so the prior run's history is not replayed/re-billed on the next fire."""
+    order: list[str] = []
+
+    class Manager:
+        async def archive(self, session_id, start_new=False, *, agent_id=None):
+            order.append(("archive", session_id, start_new, agent_id))
+
+        async def process(self, session_id, text, metadata=None, agent_id=None):
+            order.append(("process", session_id, metadata.get("is_scheduled_task"), agent_id))
+            return "ran"
+
+    app = object.__new__(PawApp)
+    app.session_manager = Manager()
+    app.config = type("Config", (), {"default_agent": "generalist"})()
+
+    result = await app.process_scheduled_job("scheduled:job-x", "do the task", name="nightly")
+
+    assert result == "ran"
+    # Archive must happen first, and with start_new=True under the same agent.
+    assert order == [
+        ("archive", "scheduled:job-x", True, "generalist"),
+        ("process", "scheduled:job-x", True, "generalist"),
+    ]
+
+
 class _RaisingReply:
     async def send(self, message: str) -> None:
         raise RuntimeError("send failed")

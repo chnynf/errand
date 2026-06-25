@@ -162,15 +162,28 @@ class AgentLoop:
         last_tool_results: list[ToolResult] = []
         scheduled_messages: list[str] = []
         next_log_extra: Optional[str] = None
-        messages = self.prompt_assembler.build_messages(
-            self.memory.build_history_messages(),
-            context_summary=self.memory.data.get("context_summary"),
-            session_note=self.memory.data.get("metadata", {}).get("session_note"),
-            instruction="Analyze the user's input. Decide whether to call a tool or respond directly.",
+
+        # ``prefix`` is the stable, append-only part: system prompt + history +
+        # the tool rounds accumulated this turn. The volatile per-turn context
+        # (current time, rolling summary, instruction) is NOT baked in here -- it
+        # is appended as the LAST message on every model call so the prefix grows
+        # monotonically and stays prefix-cacheable across rounds and turns. A
+        # volatile block wedged into the prefix would break the cache for
+        # everything after it on the next, differing request.
+        prefix = self.prompt_assembler.build_prefix_messages(
+            self.memory.build_history_messages()
         )
+        context_summary = self.memory.data.get("context_summary")
+        session_note = self.memory.data.get("metadata", {}).get("session_note")
+        instruction = "Analyze the user's input. Decide whether to call a tool or respond directly."
 
         while True:
             await _progress(f"Thinking... [{self.agent_id}]")
+            messages = prefix + self.prompt_assembler.build_context_messages(
+                context_summary=context_summary,
+                session_note=session_note,
+                instruction=instruction,
+            )
             brain_output = await self.brain.decide(
                 messages,
                 tool_definitions=[] if force_respond else tool_definitions,
@@ -287,22 +300,36 @@ class AgentLoop:
                         for tr in last_tool_results
                     ]
                     self.memory.add_tool_results(records)
-                messages.append(self._assistant_tool_message(tool_calls, decision.reasoning_content))
-                messages.extend(self._tool_result_messages(last_tool_results))
+                # Whether to replay this turn's chain-of-thought to the model on
+                # the next tool round. Off by default: the model does not need its
+                # own prior reasoning as context, and replaying it re-bills those
+                # tokens every subsequent round (and persists them in live
+                # context). Only providers that REQUIRE same-turn thinking blocks
+                # for tool-call validation (e.g. Anthropic extended thinking) need
+                # this; set ``replay_reasoning: true`` on that model in config.
+                model_cfg = self.config.models.get(usage.get("model_key")) or {}
+                replay_reasoning = bool(model_cfg.get("replay_reasoning", False))
+                prefix.append(
+                    self._assistant_tool_message(
+                        tool_calls,
+                        decision.reasoning_content if replay_reasoning else None,
+                    )
+                )
+                prefix.extend(self._tool_result_messages(last_tool_results))
 
                 # Threshold-triggered compaction. Caching makes re-sending full
                 # tool content cheap, so we don't prune per round; only when one
                 # turn's live context grows large do we condense it into a
                 # summary and continue as a fresh internal segment. Takes
                 # precedence over the round cap while compactions remain.
-                est_tokens = len(json.dumps(messages, ensure_ascii=False, default=str)) // 4
+                est_tokens = len(json.dumps(prefix, ensure_ascii=False, default=str)) // 4
                 if (
                     not force_respond
                     and compaction_count < MAX_COMPACTIONS
                     and est_tokens >= COMPACTION_TRIGGER_TOKENS
                 ):
                     await _progress(f"Condensing context... [{self.agent_id}]")
-                    summary = await self._compact_segment(messages, run_context, user_input)
+                    summary = await self._compact_segment(prefix, run_context, user_input)
                     if summary:
                         compaction_count += 1
                         self.memory.set_context_summary(summary)
@@ -312,17 +339,16 @@ class AgentLoop:
                             f"condensed ~{est_tokens} tok of live context.",
                             extra=f"agent={self.agent_id}",
                         )
-                        messages = self.prompt_assembler.build_messages(
-                            [{"role": "user", "content": user_input}],
-                            context_summary=summary,
-                            session_note=self.memory.data.get("metadata", {}).get("session_note"),
-                            instruction=(
-                                "The earlier tool history was condensed into the context "
-                                "summary above, which you wrote to be self-sufficient. "
-                                "Continue working toward the user's request using that "
-                                "summary; only re-read a file if you genuinely failed to "
-                                "capture something you need from it."
-                            ),
+                        prefix = self.prompt_assembler.build_prefix_messages(
+                            [{"role": "user", "content": user_input}]
+                        )
+                        context_summary = summary
+                        instruction = (
+                            "The earlier tool history was condensed into the context "
+                            "summary above, which you wrote to be self-sufficient. "
+                            "Continue working toward the user's request using that "
+                            "summary; only re-read a file if you genuinely failed to "
+                            "capture something you need from it."
                         )
                         action_count = 0
                         next_log_extra = "post-compaction segment"
@@ -338,15 +364,10 @@ class AgentLoop:
                         ),
                         extra=f"agent={self.agent_id}",
                     )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "You have reached the maximum number of action attempts. "
-                                "Do not call any more tools. Respond now with a summary "
-                                "of what happened."
-                            ),
-                        }
+                    instruction = (
+                        "You have reached the maximum number of action attempts. "
+                        "Do not call any more tools. Respond now with a summary "
+                        "of what happened."
                     )
                     force_respond = True
                     hit_tool_cap = True
