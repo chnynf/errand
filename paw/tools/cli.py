@@ -17,7 +17,7 @@ async def run_cli(
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Run a local shell command and return stdout/stderr.
+    """Run a local shell command and return stdout/stderr. Never use to read files.
 
     Use when the agent needs to run a CLI tool (e.g. databricks, aws, git, uv, python).
     For tasks requiring a specific external agent (Claude, Cursor), use invoke_external_agent.
