@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from paw.agent_loop.loop import AgentLoop
 from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
+from paw.runtime.run_context import RunContext
 from paw.sessions.memory import Memory
 
 
@@ -104,3 +105,30 @@ async def test_tool_error_recorded_in_usage_footer(monkeypatch, tmp_path):
 
     assert "done" in result                       # turn still completes
     assert "*Tool errors: 1*" in result           # the error was tracked + surfaced
+
+
+class _TextBrain:
+    """Answers with text immediately; records the parent's own usage."""
+
+    async def decide(self, messages, tool_definitions=None, usage_tracker=None, **kw):
+        usage = {"input_tokens": 10, "output_tokens": 5, "model": "fake"}
+        if usage_tracker is not None:
+            usage_tracker.record(usage, agent_id="test")
+        return {"decision": BrainDecision(text_response="done"), "usage": usage}
+
+
+async def test_session_total_includes_subagent_tokens(monkeypatch, tmp_path):
+    loop = _make_loop(monkeypatch, tmp_path)
+    loop.brain = _TextBrain()
+
+    # A delegated sub-agent recorded usage on the shared per-exchange tracker.
+    rc = RunContext.root()
+    rc.usage.record({"input_tokens": 100, "output_tokens": 40}, agent_id="notes-organizer")
+
+    result = await loop.process_input("hi", metadata={"_run_context": rc})
+
+    summary = loop.memory.data["token_summary"]
+    # Parent's own call (10/5) plus the delegated sub-agent (100/40).
+    assert summary["input_tokens"] == 110
+    assert summary["output_tokens"] == 45
+    assert "*Session total: 110 in, 45 out*" in result
