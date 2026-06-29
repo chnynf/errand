@@ -312,8 +312,8 @@ async def write_file(
     changes and ``append_file`` to add at the end; use this for new files or
     full replacement only.
     Call at most once per file per turn; put all content in a single write.
-    The status returned confirms success; you already hold the text you wrote, so
-    do not re-read the file to verify it or to retrieve its contents.
+    The status returned confirms success; 
+    Do not re-read the file to verify it or to retrieve its contents unless necessary.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
@@ -355,8 +355,8 @@ async def append_file(
     Use for new notes, memories, or log entries. Prefer ``edit_file`` for in-place
     changes and ``write_file`` to replace a file wholesale.
     Call at most once per file per turn; combine what you add into one append.
-    The status returned confirms success; you already hold the text you appended, so
-    do not re-read the file to verify it or to retrieve its contents.
+    The status returned confirms success;
+    Do not re-read the file to verify it or to retrieve its contents unless necessary.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
@@ -401,8 +401,8 @@ async def edit_file(
     include enough surrounding context to make the match unique.
     Prefer this over ``write_file`` for partial changes.
     Call at most once per file per turn; combine multiple edits into one call.
-    The status returned confirms success; you already hold the edited text, so do
-    not re-read the file to verify it or to retrieve its contents.
+    The status returned confirms success;
+    Do not re-read the file to verify it or to retrieve its contents unless necessary.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.

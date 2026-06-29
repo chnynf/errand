@@ -28,3 +28,6 @@ paw/contacts.md
 .vscode/
 .idea/
 *.swp
+
+# Personal research / publication planning (not part of the runtime)
+docs/research/
