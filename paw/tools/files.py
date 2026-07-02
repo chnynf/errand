@@ -27,6 +27,7 @@ Each operation has its own permission field (``True`` / ``False`` / ``"ask"``):
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import os
 import re
@@ -131,6 +132,33 @@ def _invalidate(_context: dict[str, Any] | None, target: Path) -> None:
 
 def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
+
+
+def _nearest_lines(content: str, old_string: str, limit: int = 3) -> str:
+    """Find the file lines most similar to ``old_string``'s first real line.
+
+    Turns a not-found ``edit_file`` into a self-correcting error: instead of
+    the model re-reading the whole file to hunt for the right anchor, we hand
+    back the closest existing lines (with line numbers) so it can retry with a
+    corrected ``old_string`` in the same turn.
+    """
+    query = next((ln for ln in old_string.splitlines() if ln.strip()), old_string)
+    lines = content.splitlines()
+    matcher = difflib.SequenceMatcher()
+    matcher.set_seq2(query)
+    scored: list[tuple[float, int, str]] = []
+    for i, ln in enumerate(lines, start=1):
+        if not ln.strip():
+            continue
+        matcher.set_seq1(ln)
+        ratio = matcher.ratio()
+        if ratio >= 0.4:
+            scored.append((ratio, i, ln))
+    if not scored:
+        return ""
+    scored.sort(key=lambda t: t[0], reverse=True)
+    hits = "\n".join(f"  {i}: {ln}" for _, i, ln in scored[:limit])
+    return f"\nClosest existing lines (use one verbatim as old_string):\n{hits}"
 
 
 def _suggest_paths(name: str, limit: int = 5) -> str:
@@ -391,7 +419,7 @@ async def append_file(
 async def edit_file(
     path: str,
     old_string: str,
-    new_string: str,
+    new_string: str = "",
     replace_all: bool = False,
     _context: dict[str, Any] | None = None,
 ) -> str:
@@ -407,7 +435,7 @@ async def edit_file(
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
         old_string: Exact text to find.
-        new_string: Replacement text.
+        new_string: Replacement text. Omit or pass "" to delete the matched text.
         replace_all: Replace every occurrence instead of requiring uniqueness.
 
     Returns: A status line, or an ``Error: ...`` / not-approved message.
@@ -421,7 +449,10 @@ async def edit_file(
         original = target.read_text(encoding="utf-8", errors="replace")
         count = original.count(old_string)
         if count == 0:
-            return f"Error: old_string not found in {target}."
+            return (
+                f"Error: old_string not found in {target}."
+                f"{_nearest_lines(original, old_string)}"
+            )
         if count > 1 and not replace_all:
             return (
                 f"Error: old_string is not unique in {target} ({count} matches). "
