@@ -1,6 +1,8 @@
+import mimetypes
 import os
 import re
 import smtplib
+from email.message import EmailMessage
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -46,8 +48,26 @@ def _get_smtp_config() -> dict:
     }
 
 
-def send_email(to: str, subject: str, body: str) -> str:
-    """Send an email via SMTP.
+def _resolve_attachments(attachments: str) -> tuple[list[Path], list[str]]:
+    """Split a comma/newline-separated path string into (existing, missing).
+
+    Returns the resolved paths that exist as files and a list of the raw
+    entries that could not be found.
+    """
+    entries = [p.strip() for p in re.split(r"[,\n]", attachments) if p.strip()]
+    resolved: list[Path] = []
+    missing: list[str] = []
+    for entry in entries:
+        path = Path(entry).expanduser()
+        if path.is_file():
+            resolved.append(path)
+        else:
+            missing.append(entry)
+    return resolved, missing
+
+
+def send_email(to: str, subject: str, body: str, attachments: str = "") -> str:
+    """Send an email via SMTP, optionally with file attachments.
 
     Use when the user explicitly asks to send an email (not draft).
     Resolve ambiguous recipients with list_contacts first.
@@ -58,6 +78,8 @@ def send_email(to: str, subject: str, body: str) -> str:
         body: Body text. Always open with a brief identification line, e.g.
             "Hi, I'm Yunfei's AI assistant." — unless the user explicitly asks
             you not to identify yourself.
+        attachments: Optional file path, or several paths separated by commas
+            or newlines. Each must be an existing file. Leave empty for none.
 
     Returns: Success or error message.
     """
@@ -75,12 +97,29 @@ def send_email(to: str, subject: str, body: str) -> str:
                 f"Available contacts: {available or 'none'}"
             )
 
+    files, missing = _resolve_attachments(attachments)
+    if missing:
+        return f"Attachment(s) not found: {', '.join(missing)}"
+
     try:
         cfg = _get_smtp_config()
     except EnvironmentError as e:
         return str(e)
 
-    msg = MIMEText(body, "plain", "utf-8")
+    if files:
+        msg = EmailMessage()
+        msg.set_content(body)
+        for path in files:
+            ctype, _ = mimetypes.guess_type(path.name)
+            maintype, _, subtype = (ctype or "application/octet-stream").partition("/")
+            msg.add_attachment(
+                path.read_bytes(),
+                maintype=maintype,
+                subtype=subtype or "octet-stream",
+                filename=path.name,
+            )
+    else:
+        msg = MIMEText(body, "plain", "utf-8")
     msg["From"] = cfg["address"]
     msg["To"] = recipient_email
     msg["Subject"] = subject
@@ -90,9 +129,13 @@ def send_email(to: str, subject: str, body: str) -> str:
             server.starttls()
             server.login(cfg["address"], cfg["password"])
             server.send_message(msg)
-        return f"Email sent to {recipient_email}. Subject: {subject!r}. Body: {len(body)} chars."
     except Exception as e:
         return f"Failed to send email: {e}"
+
+    result = f"Email sent to {recipient_email}. Subject: {subject!r}. Body: {len(body)} chars."
+    if files:
+        result += f" Attachments: {', '.join(p.name for p in files)}."
+    return result
 
 
 def list_contacts() -> str:
