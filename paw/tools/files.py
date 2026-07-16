@@ -134,6 +134,21 @@ def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
 
 
+def _written_summary(content: str, *, head: int = 400, tail: int = 200) -> str:
+    """A bounded, newline-preserving echo of freshly written text.
+
+    Returned by the write/append/edit tools so the model can confirm exactly
+    what landed on disk without a re-read (the whole point: a re-read pulls the
+    *entire* file back into context, often far larger than what was just
+    written). Short content is shown whole; long content is shown as head + tail
+    with the elided middle noted.
+    """
+    if len(content) <= head + tail:
+        return content
+    omitted = len(content) - head - tail
+    return f"{content[:head]}\n… [{omitted} chars omitted] …\n{content[-tail:]}"
+
+
 def _nearest_lines(content: str, old_string: str, limit: int = 3) -> str:
     """Find the file lines most similar to ``old_string``'s first real line.
 
@@ -340,8 +355,8 @@ async def write_file(
     changes and ``append_file`` to add at the end; use this for new files or
     full replacement only.
     Call at most once per file per turn; put all content in a single write.
-    The status returned confirms success; 
-    Do not re-read the file to verify it or to retrieve its contents unless necessary.
+    The status echoes the exact text now on disk, so you never need to re-read
+    to confirm the write or to retrieve what you just wrote.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
@@ -368,7 +383,10 @@ async def write_file(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         _invalidate(_context, target)
-        return f"Wrote {len(data)} bytes to {target}."
+        return (
+            f"Wrote {len(data)} bytes to {target}. This is the exact content now "
+            f"on disk -- no need to re-read to confirm:\n{_written_summary(content)}"
+        )
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -383,8 +401,8 @@ async def append_file(
     Use for new notes, memories, or log entries. Prefer ``edit_file`` for in-place
     changes and ``write_file`` to replace a file wholesale.
     Call at most once per file per turn; combine what you add into one append.
-    The status returned confirms success;
-    Do not re-read the file to verify it or to retrieve its contents unless necessary.
+    The status echoes the exact text just appended, so you never need to re-read
+    to confirm the append or to retrieve what you just wrote.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
@@ -411,7 +429,10 @@ async def append_file(
         with target.open("a", encoding="utf-8") as fh:
             fh.write("\n" + content)
         _invalidate(_context, target)
-        return f"Appended {len(data)} bytes to {target}."
+        return (
+            f"Appended {len(data)} bytes to {target}. This is the exact text just "
+            f"appended -- no need to re-read to confirm:\n{_written_summary(content)}"
+        )
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -429,8 +450,8 @@ async def edit_file(
     include enough surrounding context to make the match unique.
     Prefer this over ``write_file`` for partial changes.
     Call at most once per file per turn; combine multiple edits into one call.
-    The status returned confirms success;
-    Do not re-read the file to verify it or to retrieve its contents unless necessary.
+    The status echoes the replacement text now on disk, so you never need to
+    re-read to confirm the edit or to retrieve what you just wrote.
 
     Args:
         path: File path. Relative paths resolve against the knowledge-base root.
@@ -476,7 +497,12 @@ async def edit_file(
         target.write_text(updated, encoding="utf-8")
         _invalidate(_context, target)
         suffix = "s" if replacements != 1 else ""
-        return f"Replaced {replacements} occurrence{suffix} in {target}: {old_snippet[:60]!r} → {new_snippet[:60]!r}."
+        outcome = (
+            f"deleted the matched text ({old_snippet[:60]!r})"
+            if not new_string
+            else f"the replacement now on disk -- no need to re-read to confirm:\n{_written_summary(new_string)}"
+        )
+        return f"Replaced {replacements} occurrence{suffix} in {target}; {outcome}"
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
