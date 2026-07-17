@@ -25,6 +25,21 @@ async def test_run_cli_success():
     assert "hello from cli" in result
 
 
+async def test_run_cli_blocks_filesystem_commands():
+    for command in ("cat foo.md", "ls -la", "/bin/cat foo.md", "sudo rm -rf x", "FOO=1 sed -i s/a/b/ f"):
+        result = await run_cli(command, timeout_seconds=5)
+        assert "Command not run" in result, command
+        assert "read_file" in result
+
+
+async def test_run_cli_allows_subcommands_and_pipelines():
+    reply_to = FakeReplyTarget(approved=False)
+    for command in ("git grep foo", "databricks fs ls dbfs:/", "git log | head -5"):
+        result = await run_cli(command, timeout_seconds=5, _context={"reply_to": reply_to})
+        # Reaches the approval gate instead of the filesystem redirect.
+        assert "not approved" in result, command
+
+
 async def test_run_cli_timeout():
     result = await run_cli(
         f"{sys.executable} -c \"import time; time.sleep(5)\"",

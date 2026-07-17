@@ -9,6 +9,24 @@ from typing import Any
 DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_MAX_OUTPUT_CHARS = 20000
 
+# Commands redirected to the dedicated file tools. Only the leading token is
+# checked, so pipelines and subcommands (`git grep`, `databricks fs ls`) pass.
+_FILESYSTEM_COMMANDS = frozenset(
+    {
+        "cat", "head", "tail", "less", "more",
+        "ls", "tree", "find", "grep", "rg",
+        "sed", "awk", "echo", "printf", "tee",
+        "touch", "cp", "mv", "rm", "mkdir",
+    }
+)
+
+_FILESYSTEM_REDIRECT = (
+    "Command not run: use the dedicated file tools for filesystem work "
+    "(read_file, write_file, edit_file, append_file, delete_file, list_dir, "
+    "grep_files, find_files) instead of `{name}`. "
+    "run_cli is for external CLIs (databricks, aws, git, uv, python)."
+)
+
 
 async def run_cli(
     command: str,
@@ -17,9 +35,12 @@ async def run_cli(
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Run a local shell command and return stdout/stderr. Never use to read files.
+    """Run a local shell command (databricks, aws, git, uv, python, ...).
 
-    Use when the agent needs to run a CLI tool (e.g. databricks, aws, git, uv, python).
+    Never use this for file operations — reading, writing, listing, searching,
+    or deleting files. Use the dedicated tools instead: read_file, write_file,
+    edit_file, list_dir, grep_files, find_files. Commands like cat, ls, sed,
+    or echo-redirects are rejected without running.
     For tasks requiring a specific external agent (Claude, Cursor), use invoke_external_agent.
 
     Args:
@@ -33,6 +54,10 @@ async def run_cli(
     command = (command or "").strip()
     if not command:
         return "CLI execution failed: command is required."
+
+    blocked = _filesystem_command(command)
+    if blocked:
+        return _FILESYSTEM_REDIRECT.format(name=blocked)
 
     timeout = max(1, min(int(timeout_seconds or DEFAULT_TIMEOUT_SECONDS), 3600))
     max_chars = max(1000, min(int(max_output_chars or DEFAULT_MAX_OUTPUT_CHARS), 100000))
@@ -87,6 +112,20 @@ async def run_cli(
             stderr_text or "(empty)",
         ]
     )
+
+
+def _filesystem_command(command: str) -> str | None:
+    """The blocked leading command name, or ``None`` if the command may run.
+
+    Skips ``sudo`` and leading ``VAR=value`` assignments, then compares the
+    basename of the first real token (so ``/bin/cat`` is still caught).
+    """
+    for token in command.split():
+        if token == "sudo" or ("=" in token and not token.startswith("=")):
+            continue
+        name = Path(token).name.lower()
+        return name if name in _FILESYSTEM_COMMANDS else None
+    return None
 
 
 def _resolve_cwd(cwd: str) -> Path:
