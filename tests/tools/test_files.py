@@ -261,6 +261,35 @@ async def test_edit_missing_match_errors(kb: Path):
     assert "not found" in await ft.edit_file("INDEX.md", "absent", "x")
 
 
+async def test_edit_multi_applies_in_order(kb: Path):
+    out = await ft.edit_file(
+        "notes/a.md",
+        edits=[
+            {"old_string": "beta", "new_string": "BETA"},
+            {"old_string": "alpha", "new_string": "ALPHA", "replace_all": True},
+        ],
+    )
+    assert "Replaced 3 occurrences" in out
+    assert (kb / "notes" / "a.md").read_text(encoding="utf-8") == "ALPHA\nBETA\nALPHA\n"
+
+
+async def test_edit_multi_aborts_whole_call_on_failure(kb: Path):
+    out = await ft.edit_file(
+        "notes/a.md",
+        edits=[
+            {"old_string": "beta", "new_string": "BETA"},
+            {"old_string": "absent", "new_string": "x"},
+        ],
+    )
+    assert out.startswith("Error: edits[2]:")
+    # first edit must not have been applied
+    assert (kb / "notes" / "a.md").read_text(encoding="utf-8") == "alpha\nbeta\nalpha\n"
+
+
+async def test_edit_multi_empty_list_errors(kb: Path):
+    assert (await ft.edit_file("notes/a.md", edits=[])).startswith("Error:")
+
+
 async def test_delete_file(kb: Path):
     out = await ft.delete_file("notes/a.md")
     assert out.startswith("Deleted file")

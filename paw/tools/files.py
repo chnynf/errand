@@ -134,21 +134,6 @@ def _preview(text: str, n: int = 200) -> str:
     return text[:n].replace("\n", "↵")
 
 
-def _written_summary(content: str, *, head: int = 400, tail: int = 200) -> str:
-    """A bounded, newline-preserving echo of freshly written text.
-
-    Returned by the write/append/edit tools so the model can confirm exactly
-    what landed on disk without a re-read (the whole point: a re-read pulls the
-    *entire* file back into context, often far larger than what was just
-    written). Short content is shown whole; long content is shown as head + tail
-    with the elided middle noted.
-    """
-    if len(content) <= head + tail:
-        return content
-    omitted = len(content) - head - tail
-    return f"{content[:head]}\n… [{omitted} chars omitted] …\n{content[-tail:]}"
-
-
 def _nearest_lines(content: str, old_string: str, limit: int = 3) -> str:
     """Find the file lines most similar to ``old_string``'s first real line.
 
@@ -349,14 +334,14 @@ async def write_file(
 
     Parent directories are created. Prefer ``edit_file`` for partial changes
     and ``append_file`` to add at the end; use this for new files or full
-    replacement only. One call per file per turn, with all content. The
-    result echoes what is now on disk -- never re-read to confirm a write.
+    replacement only. One call per file per turn, with all content. Writes
+    land exactly as submitted -- never re-read to confirm a write.
 
     Args:
         path: File path; relative resolves against the knowledge-base root.
         content: Full UTF-8 text to write.
 
-    Returns: Status echoing the written text, or ``Error: ...`` / not-approved.
+    Returns: Status, or ``Error: ...`` / not-approved.
     """
     try:
         target, name, file_scope = _locate(path)
@@ -377,10 +362,7 @@ async def write_file(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         _invalidate(_context, target)
-        return (
-            f"Wrote {len(data)} bytes to {target}. Now on disk "
-            f"(no re-read needed):\n{_written_summary(content)}"
-        )
+        return f"Wrote {len(data)} bytes to {target} -- content as submitted, no re-read needed."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
@@ -394,14 +376,14 @@ async def append_file(
 
     Use for new notes, memories, or log entries. Prefer ``edit_file`` for
     in-place changes and ``write_file`` for full replacement. One call per
-    file per turn, combining what you add. The result echoes what was
-    appended -- never re-read to confirm.
+    file per turn, combining what you add. Appends land exactly as
+    submitted -- never re-read to confirm.
 
     Args:
         path: File path; relative resolves against the knowledge-base root.
         content: UTF-8 text to append.
 
-    Returns: Status echoing the appended text, or ``Error: ...`` / not-approved.
+    Returns: Status, or ``Error: ...`` / not-approved.
     """
     try:
         target, name, file_scope = _locate(path)
@@ -422,78 +404,95 @@ async def append_file(
         with target.open("a", encoding="utf-8") as fh:
             fh.write("\n" + content)
         _invalidate(_context, target)
-        return (
-            f"Appended {len(data)} bytes to {target}. Appended text "
-            f"(no re-read needed):\n{_written_summary(content)}"
-        )
+        return f"Appended {len(data)} bytes to {target} -- content as submitted, no re-read needed."
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 
 
 async def edit_file(
     path: str,
-    old_string: str,
+    old_string: str = "",
     new_string: str = "",
     replace_all: bool = False,
+    edits: list | None = None,
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Replace text in an existing file.
+    """Replace text in an existing file; one pair, or several via ``edits``.
 
-    ``old_string`` must match exactly once unless ``replace_all``; include
-    enough surrounding context to be unique. Prefer this over ``write_file``
-    for partial changes. Combine edits into one call per file per turn. The
-    result echoes the replacement -- never re-read to confirm.
+    Each ``old_string`` must match exactly once unless ``replace_all``;
+    include enough surrounding context to be unique. Prefer this over
+    ``write_file`` for partial changes. For several changes to one file,
+    pass them all in ``edits`` in a single call. Edits apply exactly as
+    submitted -- never re-read to confirm.
 
     Args:
         path: File path; relative resolves against the knowledge-base root.
         old_string: Exact text to find.
         new_string: Replacement text; omit or "" to delete the match.
         replace_all: Replace every occurrence instead of requiring uniqueness.
+        edits: Several edits in one call: a list of ``{"old_string": ...,
+            "new_string": ..., "replace_all": ...}`` objects, applied in
+            order (later edits see earlier results). When given, the
+            single-edit arguments are ignored. All edits must apply; any
+            failure aborts the whole call with no changes.
 
-    Returns: Status echoing the replacement, or ``Error: ...`` / not-approved.
+    Returns: Status, or ``Error: ...`` / not-approved.
     """
     try:
-        if not old_string:
-            return "Error: old_string must not be empty."
+        if edits is None:
+            edits = [
+                {
+                    "old_string": old_string,
+                    "new_string": new_string,
+                    "replace_all": replace_all,
+                }
+            ]
+        if not edits:
+            return "Error: edits must not be empty."
         target, name, file_scope = _locate(path)
         if not target.is_file():
             raise FileNotFoundError(f"Not a file: {target}")
-        original = target.read_text(encoding="utf-8", errors="replace")
-        count = original.count(old_string)
-        if count == 0:
-            return (
-                f"Error: old_string not found in {target}."
-                f"{_nearest_lines(original, old_string)}"
-            )
-        if count > 1 and not replace_all:
-            return (
-                f"Error: old_string is not unique in {target} ({count} matches). "
-                "Add surrounding context or set replace_all=True."
-            )
-        replacements = count if replace_all else 1
-        updated = original.replace(old_string, new_string, -1 if replace_all else 1)
-        old_snippet = _preview(old_string)
-        new_snippet = _preview(new_string)
+        updated = target.read_text(encoding="utf-8", errors="replace")
+        total = 0
+        details: list[str] = []
+        for i, edit in enumerate(edits, start=1):
+            label = f"edits[{i}]: " if len(edits) > 1 else ""
+            if not isinstance(edit, dict):
+                return f"Error: {label}each edit must be an object with old_string/new_string."
+            old = str(edit.get("old_string") or "")
+            new = str(edit.get("new_string") or "")
+            everywhere = bool(edit.get("replace_all"))
+            if not old:
+                return f"Error: {label}old_string must not be empty."
+            count = updated.count(old)
+            if count == 0:
+                return (
+                    f"Error: {label}old_string not found in {target}."
+                    f"{_nearest_lines(updated, old)}"
+                )
+            if count > 1 and not everywhere:
+                return (
+                    f"Error: {label}old_string is not unique in {target} ({count} matches). "
+                    "Add surrounding context or set replace_all=True."
+                )
+            updated = updated.replace(old, new, -1 if everywhere else 1)
+            total += count if everywhere else 1
+            details.append(f"From: {_preview(old)}\nTo:   {_preview(new)}")
         blocked = await _authorize(
             file_scope, name, _context,
             op_key="edit",
             operation="edit file",
-            detail=(
-                f"Path: {target}\nReplacements: {replacements}\n"
-                f"From: {old_snippet}\nTo:   {new_snippet}"
-            ),
+            detail=f"Path: {target}\nReplacements: {total}\n" + "\n".join(details),
         )
         if blocked:
             return blocked
         target.write_text(updated, encoding="utf-8")
         _invalidate(_context, target)
-        suffix = "s" if replacements != 1 else ""
-        outcome = (
-            f"deleted the matched text ({old_snippet[:60]!r})"
-            if not new_string
-            else f"replacement now on disk (no re-read needed):\n{_written_summary(new_string)}"
+        suffix = "s" if total != 1 else ""
+        return (
+            f"Replaced {total} occurrence{suffix} in {target} "
+            f"-- as submitted, no re-read needed."
         )
-        return f"Replaced {replacements} occurrence{suffix} in {target}; {outcome}"
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
 

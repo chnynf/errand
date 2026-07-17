@@ -66,6 +66,8 @@ _PY_TO_JSON_TYPE: dict[str, str] = {
     "int": "integer",
     "float": "number",
     "bool": "boolean",
+    "list": "array",
+    "dict": "object",
 }
 
 # Accepted Python types per JSON-schema type, for harness-side arg validation.
@@ -90,12 +92,22 @@ def _json_type_ok(value: Any, json_type: str) -> bool:
 
 
 def _annotation_name(annotation: Any, default: str) -> str:
-    """Return a stable annotation name for real and postponed annotations."""
+    """Return a stable annotation name for real and postponed annotations.
+
+    Postponed annotations arrive as strings ("list | None", "dict[str, Any]");
+    strip the optional/generic parts down to the base type name.
+    """
     if annotation is inspect.Parameter.empty:
         return default
     if isinstance(annotation, str):
-        return annotation
-    return getattr(annotation, "__name__", default)
+        name = annotation
+    else:
+        name = getattr(annotation, "__name__", None) or str(annotation)
+        if name in ("Union", "Optional"):
+            # Evaluated unions (e.g. ``list | None``): their str() form
+            # ("list | None") parses the same as a postponed annotation.
+            name = str(annotation)
+    return name.split("|", 1)[0].split("[", 1)[0].strip() or default
 
 
 class ToolRegistry:

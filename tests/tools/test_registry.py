@@ -252,6 +252,17 @@ def test_validate_args_valid_returns_none(tools_dir: Path):
     assert registry.validate_args("add", {"a": 2, "b": 3}) is None
 
 
+def test_optional_list_param_typed_as_array(tools_dir: Path):
+    (tools_dir / "multi.py").write_text(
+        'def multi(items: list | None = None) -> str:\n    """Take a list."""\n    return str(items)\n',
+        encoding="utf-8",
+    )
+    registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
+    assert registry.validate_args("multi", {"items": [1, 2]}) is None
+    out = registry.validate_args("multi", {"items": "not-a-list"})
+    assert out.startswith("Error:") and "array" in out
+
+
 def test_call_tool_dispatches_without_validating(tools_dir: Path):
     registry = ToolRegistry(tools_dir=tools_dir, native_names=["greet"])
     assert asyncio.run(registry.execute("call_tool", {"name": "add", "args": {"a": 2, "b": 3}})) == 5
