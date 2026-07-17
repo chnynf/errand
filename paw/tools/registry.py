@@ -42,9 +42,9 @@ _SKIP_MODULES = {"__init__", "registry"}
 # tool descriptions or general runtime prose.
 TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
-    "- Think before calling. Avoid tool calls unless absolutely necessary.\n"
-    "- Route, don't search, for the knowledge base. Resolve the path from the index.\n"
-    "- Merge or batch work whenever possible. Prefer parallel tool calls; Prefer editing file in one run."
+    "- Think before calling. Avoid unnecessary tool calls, such as file reads.\n"
+    "- For file reads, resolve the path from the index and read it directly; do not search or list files.\n"
+    "- Batch work whenever possible; make independent calls in parallel. For example, combine edits into one run."
 )
 
 # Core tools kept as real native tool-calls (full schema + provider-side arg
