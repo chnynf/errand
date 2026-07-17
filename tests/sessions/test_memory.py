@@ -1,195 +1,126 @@
-from paw.contracts.types import ToolCall, ToolResult
-from paw.sessions.memory import (
-    IDLE_BOUNDARY_NOTE,
-    Memory,
-    _safe_stem,
-    strip_tool_call_signature,
-)
-from paw.tools.registry import ToolRegistry
-
-# A Gemini-style id with a thought signature smuggled in by LiteLLM.
-_THOUGHT_ID = "call_82d77cbf__thought__EoCaAQr8mQEBDDnWxxktVVmd" * 4
+from paw.sessions.memory import Memory, _safe_stem
 
 
-def test_history_messages_use_roles_without_persisted_file_contents(
-    monkeypatch,
-    tmp_path,
-):
+def _exchange(question: str, answer: str, *, tool_note: str | None = None) -> list[dict]:
+    """A folded exchange in the unified-log shape the loop produces."""
+    messages: list[dict] = [{"role": "user", "content": question}]
+    if tool_note is not None:
+        messages.append(
+            {"role": "assistant", "tool_calls": [
+                {"id": "h1", "type": "function",
+                 "function": {"name": "read_file", "arguments": "{}"}}]}
+        )
+        messages.append({"role": "tool", "tool_call_id": "h1", "content": tool_note})
+    messages.append({"role": "assistant", "content": answer})
+    return messages
+
+
+def test_log_stores_and_replays_chat_messages_verbatim(monkeypatch, tmp_path):
+    # The log IS the replay format: add_exchange appends chat messages and
+    # build_history_messages returns them unchanged (no translation layer).
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("test-session")
 
-    memory.add_history("user", "Read the profile.")
-    memory.add_history(
-        "ai",
-        {
-            "tool_calls": [
-                {
-                    "id": "tc-1",
-                    "name": "read_file",
-                    "params": {"path": "INDEX.md"},
-                }
-            ],
-            "text_response": None,
-        },
+    folded = _exchange(
+        "Read the profile.",
+        "I loaded the profile.",
+        tool_note=(
+            "tool call: read_file(path='INDEX.md')\n"
+            "tool result: # Agent KB\nsecret soul [22 chars total]"
+        ),
     )
-    registry = ToolRegistry()
-    call = ToolCall(id="tc-1", name="read_file", params={"path": "INDEX.md"})
-    result = ToolResult(
-        tool_call_id="tc-1", name="read_file", content="# Agent KB\nsecret soul"
-    )
-    memory.add_tool_results([registry.compact_result(call, result)])
-    memory.add_history(
-        "ai",
-        {
-            "tool_calls": [],
-            "text_response": "I loaded the profile.",
-            "context_summary": "Profile loaded from INDEX.md.",
-        },
-    )
-    memory.set_context_summary("Profile loaded from INDEX.md.")
+    memory.add_exchange(folded)
 
-    messages = memory.build_history_messages()
-
-    assert messages[0] == {"role": "user", "content": "Read the profile."}
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["tool_calls"][0]["id"] == "tc-1"
-    assert messages[1]["tool_calls"][0]["function"]["name"] == "read_file"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["tool_call_id"] == "tc-1"
-    assert "ref INDEX.md" in messages[2]["content"]
-    assert "# Agent KB" not in messages[2]["content"]
-    assert "secret soul" not in messages[2]["content"]
-    assert messages[3] == {"role": "assistant", "content": "I loaded the profile."}
-
-    tool_entry = next(entry for entry in memory.data["history"] if entry["role"] == "tool")
-    stored_result = tool_entry["content"][0]
-    assert stored_result["result_ref"] == {
-        "type": "file",
-        "path": "INDEX.md",
-    }
-    assert "secret soul" not in str(stored_result)
+    assert memory.build_history_messages() == folded
+    # Every persisted entry wraps its message with a timestamp.
+    assert all(e["timestamp"] > 0 and e["message"] for e in memory.data["history"])
 
 
-def test_strip_tool_call_signature():
-    # Gemini thought signature is removed, leaving the stable handle.
-    assert strip_tool_call_signature(_THOUGHT_ID) == "call_82d77cbf"
-    # Plain ids from other providers are untouched (no marker -> no-op).
-    assert strip_tool_call_signature("call_abc123") == "call_abc123"
-    assert strip_tool_call_signature("tc-1") == "tc-1"
-    assert strip_tool_call_signature("") == ""
-
-
-def test_thought_signature_stripped_on_persist_and_replay(monkeypatch, tmp_path):
+def test_history_window_is_token_budgeted_and_cache_stable(monkeypatch, tmp_path):
+    # Budgeted by tokens, cut on exchange boundaries; oldest exchanges drop in
+    # groups of 3 so the window start holds steady (prefix stays cacheable) and
+    # advances only in coarse jumps.
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
-    memory = Memory("sig-session")
-
-    memory.add_history("user", "What's for dinner?")
-    memory.add_history(
-        "ai",
-        {
-            "tool_calls": [
-                {"id": _THOUGHT_ID, "name": "read_file",
-                 "params": {"path": "meal.md", "scope": "notes"}}
-            ],
-            "text_response": None,
-        },
-    )
-    registry = ToolRegistry()
-    call = ToolCall(id=_THOUGHT_ID, name="read_file", params={"path": "meal.md", "scope": "notes"})
-    result = ToolResult(tool_call_id=_THOUGHT_ID, name="read_file", content="pasta")
-    memory.add_tool_results([registry.compact_result(call, result)])
-
-    # Persisted to disk without the blob.
-    ai_entry = next(e for e in memory.data["history"] if e["role"] == "ai")
-    assert ai_entry["content"]["tool_calls"][0]["id"] == "call_82d77cbf"
-    tool_entry = next(e for e in memory.data["history"] if e["role"] == "tool")
-    assert tool_entry["content"][0]["tool_call_id"] == "call_82d77cbf"
-    assert "__thought__" not in str(memory.data["history"])
-
-    # Replayed history keeps assistant/tool ids matched and blob-free.
-    messages = memory.build_history_messages()
-    assert messages[1]["tool_calls"][0]["id"] == "call_82d77cbf"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["tool_call_id"] == "call_82d77cbf"
-    assert "__thought__" not in str(messages)
-
-
-def test_legacy_session_with_blob_ids_is_stripped_on_read(monkeypatch, tmp_path):
-    # Simulate a session persisted before the fix: full blob ids on disk.
-    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
-    memory = Memory("legacy-session")
-    memory.data["history"] = [
-        {"role": "user", "content": "hi", "metadata": {}},
-        {"role": "ai", "content": {
-            "tool_calls": [{"id": _THOUGHT_ID, "name": "read_file",
-                            "params": {"path": "x.md", "scope": "kb"}}],
-            "text_response": None}, "metadata": {}},
-        {"role": "tool", "content": [{
-            "tool_call_id": _THOUGHT_ID, "name": "read_file",
-            "params": {"path": "x.md", "scope": "kb"}, "content_chars": 5,
-            "result_ref": {"type": "file", "scope": "kb", "path": "x.md"}}],
-         "metadata": {}},
-    ]
-
-    messages = memory.build_history_messages()
-
-    # The assistant + tool pair still resolves (ids matched after stripping).
-    assert messages[1]["tool_calls"][0]["id"] == "call_82d77cbf"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["tool_call_id"] == "call_82d77cbf"
-    assert "__thought__" not in str(messages)
-
-
-def test_scheduled_history_renders_as_user_message(monkeypatch, tmp_path):
-    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
-    memory = Memory("test-session")
-    memory.add_history("scheduled", "A scheduled task is firing now.\nTASK: water plants")
-
-    messages = memory.build_history_messages()
-
-    assert messages == [
-        {
-            "role": "user",
-            "content": "A scheduled task is firing now.\nTASK: water plants",
-        }
-    ]
-
-
-def test_session_note_is_sent_as_runtime_context(monkeypatch, tmp_path):
-    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
-    memory = Memory("test-session")
-
-    memory.add_session_note(IDLE_BOUNDARY_NOTE)
-
-    assert memory.data["metadata"]["session_note"] == IDLE_BOUNDARY_NOTE
-    assert memory.build_history_messages() == []
-
-
-def test_history_window_start_is_cache_stable(monkeypatch, tmp_path):
-    # The window start must hold steady across turns (so the message prefix
-    # stays cache-eligible) and only advance in coarse `chunk`-sized jumps,
-    # rather than sliding one entry per turn.
-    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._HISTORY_TOKEN_BUDGET", 500)
     memory = Memory("window-session")
-    for i in range(40):
-        memory.add_history("user", f"msg {i}")
 
-    def first_content(n_entries: int) -> str:
-        memory.data["history"] = [
-            {"role": "user", "content": f"msg {i}", "metadata": {}}
-            for i in range(n_entries)
-        ]
-        return memory.build_history_messages(recent_n=20, chunk=8)[0]["content"]
+    def first_marker(n_exchanges: int) -> str:
+        memory.data["history"] = []
+        for i in range(n_exchanges):
+            # Each exchange ~100 tokens, marked "e{i}".
+            memory.add_exchange(
+                [{"role": "user", "content": f"e{i}".ljust(400, "x")}]
+            )
+        return memory.build_history_messages()[0]["content"].split("x", 1)[0]
 
-    # Under the floor: nothing dropped, window starts at the very first entry.
-    assert first_content(20) == "msg 0"
-    # Past the floor but within the same chunk: start holds steady at 0.
-    assert first_content(21) == "msg 0"
-    assert first_content(27) == "msg 0"
-    # Crossing the chunk boundary advances the floor by exactly `chunk` (8).
-    assert first_content(28) == "msg 8"
-    assert first_content(35) == "msg 8"
-    assert first_content(36) == "msg 16"
+    # Under budget: all exchanges shown, starting at e0.
+    assert first_marker(4) == "e0"
+    # Over budget: oldest drop in groups of 3; start holds...
+    assert first_marker(5) == "e3"
+    assert first_marker(7) == "e3"
+    # ...then advances by exactly one group.
+    assert first_marker(8) == "e6"
+    assert first_marker(10) == "e6"
+    assert first_marker(11) == "e9"
+
+
+def test_history_window_keeps_at_least_one_exchange(monkeypatch, tmp_path):
+    # A single oversized exchange must survive whole rather than be dropped.
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._HISTORY_TOKEN_BUDGET", 100)
+    memory = Memory("floor-session")
+    memory.add_exchange(_exchange("q1", "y" * 8000))  # ~2000 tokens
+
+    msgs = memory.build_history_messages()
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "q1"
+
+
+def test_empty_history_replays_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    assert Memory("empty-session").build_history_messages() == []
+
+
+async def test_save_trims_on_exchange_boundary(monkeypatch, tmp_path):
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._MAX_HISTORY_ENTRIES", 7)
+    memory = Memory("trim-session")
+    for i in range(4):  # 4 exchanges x 2 entries = 8 > 7
+        memory.add_exchange(_exchange(f"q{i}", f"a{i}"))
+
+    await memory.save_session()
+
+    # Trimmed to whole exchanges: the oldest exchange dropped entirely, and the
+    # remaining log still starts at a user message.
+    history = memory.data["history"]
+    assert len(history) == 6
+    assert history[0]["message"] == {"role": "user", "content": "q1"}
+
+
+def test_old_format_sessions_are_discarded_on_load(monkeypatch, tmp_path):
+    # Pre-unified-log entries (no "message" key) are dropped, not translated.
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    import json
+    (tmp_path / "old-session.json").write_text(
+        json.dumps({
+            "session_id": "old-session",
+            "created_at": 1.0,
+            "history": [
+                {"timestamp": 1.0, "role": "user", "content": "old entry"},
+                {"timestamp": 2.0, "role": "ai", "content": {"text_response": "old"}},
+            ],
+            "context_summary": "kept",
+            "metadata": {},
+            "token_summary": {"input_tokens": 5, "output_tokens": 5},
+        }),
+        encoding="utf-8",
+    )
+
+    memory = Memory("old-session")
+
+    assert memory.data["history"] == []
+    assert memory.data["context_summary"] == "kept"  # non-history state survives
+    assert memory.build_history_messages() == []
 
 
 def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_path):
@@ -203,7 +134,7 @@ def test_session_id_with_illegal_filename_chars_is_archivable(monkeypatch, tmp_p
 async def test_archive_session_with_illegal_chars(monkeypatch, tmp_path):
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("wechat:o9cq80wyNyZ@im.wechat")
-    memory.add_history("user", "hi")
+    memory.add_exchange(_exchange("hi", "hello"))
     await memory.save_session()
 
     await memory.archive_session(start_new=True)

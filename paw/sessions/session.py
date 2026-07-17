@@ -33,9 +33,6 @@ class AgentSession:
         """Process one user/scheduled input and return the final response."""
         return await self._loop.process_input(text, metadata=metadata)
 
-    def add_session_note(self, note: str) -> None:
-        self._loop.add_session_note(note)
-
     def last_activity_at(self) -> float | None:
         return self._loop.last_activity_at()
 

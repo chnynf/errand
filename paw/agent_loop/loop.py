@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict
 from typing import List, Optional
 
 from paw.agent_loop.prompt_assembler import PromptAssembler
@@ -34,35 +33,17 @@ from paw.tools.registry import ToolRegistry
 MAX_TOOL_ROUNDS = 8
 MAX_RESPONSE_RETRIES = 3
 
-# When a single turn's live context grows past this estimate (~chars/4), the
-# loop condenses everything gathered so far into a summary and continues as a
-# fresh internal segment -- same turn, same single reply to the interface.
-# Caching covers the cheap case; this only fires when one turn reads a lot.
-COMPACTION_TRIGGER_TOKENS = 20_000
-MAX_COMPACTIONS = 3
-
-# Orchestration instruction the loop injects to condense an oversized turn
-# before continuing (see _compact_segment). Like the other instruction strings
-# in this file, it drives the loop's control flow, so it lives with the loop.
-COMPACTION_INSTRUCTION = (
-    "Your working context for this turn has grown large and is about to be "
-    "condensed so you can keep going with a clean slate. Write a summary that "
-    "lets you continue WITHOUT the detailed tool history below.\n\n"
-    "Anchor everything to the user's original request (shown at the top of this "
-    "conversation). Keep only what is relevant to fulfilling it; drop tangential "
-    "detail.\n\n"
-    "Include, concisely:\n"
-    "1. Goal -- restate the user's request in one or two sentences.\n"
-    "2. Findings -- the concrete facts, file contents, search results, or data "
-    "gathered from tool calls so far that matter for the goal. Quote exact values "
-    "(paths, numbers, names) you will need.\n"
-    "3. Decisions -- anything you have already concluded or chosen.\n"
-    "4. Remaining -- what still needs to be done to finish the task.\n\n"
-    "Do not call any tools. Respond with the summary text only -- no preamble. The "
-    "detailed history is being discarded, so anything you omit is gone. Capture "
-    "every path, value, and file detail you will need so you can finish from this "
-    "summary ALONE, without re-reading anything you have already read."
-)
+# The current exchange is kept at full fidelity, entry by entry, with no
+# intra-turn compaction: full tool results stay in the append-only
+# ``current_exchange`` section so it grows monotonically and the
+# system+history+current_exchange prefix stays cacheable. Trimming is deferred to
+# step-out (tool results persist as compact refs; old exchanges leave the
+# history window). The only intra-exchange guard is an overflow stop: if the
+# live context approaches the model's context window, the loop forces a final
+# response rather than taking more tool calls, so a runaway turn can't exceed
+# the window. Set below the smallest supported window, leaving headroom for the
+# forced final call's own output.
+CONTEXT_OVERFLOW_TOKENS = 150_000
 
 # Tools a job is forbidden from calling while it is itself executing, so a
 # scheduled run can never (re)schedule and spin into an infinite loop.
@@ -112,9 +93,6 @@ class AgentLoop:
         )
         self.brain = Brain(debug=debug, agent_spec=self.agent_spec, config=self.config)
 
-    def add_session_note(self, note: str) -> None:
-        self.memory.add_session_note(note)
-
     def last_activity_at(self) -> Optional[float]:
         return self.memory.last_activity_at()
 
@@ -130,7 +108,6 @@ class AgentLoop:
         is_scheduled = bool(m.get("is_scheduled_task"))
         input_title = "Parent Agent -> Loop" if is_subagent else "User -> Loop"
         debug_log(input_title, user_input, extra=f"agent={self.agent_id}", truncate=False)
-        self.memory.add_history("scheduled" if is_scheduled else "user", user_input)
 
         # Root exchanges create the RunContext (+ its UsageTracker); delegated
         # child loops reuse the parent's so usage rolls up across agents.
@@ -153,7 +130,6 @@ class AgentLoop:
         # reached via call_tool), so enforcement moves to execution time below.
         tool_definitions = self.tool_registry.get_tool_definitions()
         action_count = 0
-        compaction_count = 0
         force_respond = False
         hit_tool_cap = False
         suppress_usage_footer = bool(m.get("suppress_usage_footer"))
@@ -162,26 +138,32 @@ class AgentLoop:
         last_tool_results: list[ToolResult] = []
         scheduled_messages: list[str] = []
         next_log_extra: Optional[str] = None
+        # Per-round (effective calls, results), collected for the step-out fold.
+        tool_rounds: list[tuple[list[ToolCall], list[ToolResult]]] = []
 
-        # ``prefix`` is the stable, append-only part: system prompt + history +
-        # the tool rounds accumulated this turn. The volatile per-turn context
-        # (current time, rolling summary, instruction) is NOT baked in here -- it
-        # is appended as the LAST message on every model call so the prefix grows
-        # monotonically and stays prefix-cacheable across rounds and turns. A
-        # volatile block wedged into the prefix would break the cache for
-        # everything after it on the next, differing request.
-        prefix = self.prompt_assembler.build_prefix_messages(
-            self.memory.build_history_messages()
-        )
+        # History = prior exchanges, compacted (from memory). The CURRENT
+        # exchange is assembled live at full fidelity in ``current_exchange``,
+        # kept separate from history: it starts with the user's input and gains
+        # one assistant message + its tool results per round (appended below).
+        # Each model call is ``system + history + current_exchange + context``
+        # (see PromptAssembler.build_prompt); the first three form the stable,
+        # append-only prefix that stays prefix-cacheable across rounds, while the
+        # volatile context (time, rolling summary, instruction) is re-appended
+        # last so it never breaks that prefix.
+        history_messages = self.memory.build_history_messages()
+        current_exchange: list[dict] = [self._user_message(user_input)]
         context_summary = self.memory.data.get("context_summary")
-        session_note = self.memory.data.get("metadata", {}).get("session_note")
-        instruction = "Analyze the user's input. Decide whether to call a tool or respond directly."
+        # No default instruction: the system prompt already states the model's
+        # job and response format. Only real control directives (the forced
+        # final response below) set this, keeping the volatile block minimal.
+        instruction: Optional[str] = None
 
         while True:
             await _progress(f"Thinking... [{self.agent_id}]")
-            messages = prefix + self.prompt_assembler.build_context_messages(
+            messages = self.prompt_assembler.build_prompt(
+                history_messages,
+                current_exchange,
                 context_summary=context_summary,
-                session_note=session_note,
                 instruction=instruction,
             )
             brain_output = await self.brain.decide(
@@ -204,8 +186,6 @@ class AgentLoop:
             if brain_output.get("error"):
                 final_response = decision.text_response or "I encountered an internal error."
                 break
-
-            self.memory.add_history("ai", asdict(decision), metadata={"usage": usage})
 
             ctx_summary = decision.context_summary
             if ctx_summary:
@@ -291,15 +271,12 @@ class AgentLoop:
                         scheduled_messages.append(tr.content)
 
                 if last_tool_results:
-                    calls_by_id = {
-                        tc.id: ToolCall(id=tc.id, name=eff[tc.id][0], params=eff[tc.id][1])
+                    # Effective (unwrapped) calls, kept for the step-out fold.
+                    effective_calls = [
+                        ToolCall(id=tc.id, name=eff[tc.id][0], params=eff[tc.id][1])
                         for tc in tool_calls
-                    }
-                    records = [
-                        self.tool_registry.compact_result(calls_by_id.get(tr.tool_call_id), tr)
-                        for tr in last_tool_results
                     ]
-                    self.memory.add_tool_results(records)
+                    tool_rounds.append((effective_calls, last_tool_results))
                 # Whether to replay this turn's chain-of-thought to the model on
                 # the next tool round. Off by default: the model does not need its
                 # own prior reasoning as context, and replaying it re-bills those
@@ -309,63 +286,41 @@ class AgentLoop:
                 # this; set ``replay_reasoning: true`` on that model in config.
                 model_cfg = self.config.models.get(usage.get("model_key")) or {}
                 replay_reasoning = bool(model_cfg.get("replay_reasoning", False))
-                prefix.append(
-                    self._assistant_tool_message(
+                # Append this round to the live current-exchange section (full
+                # fidelity). Nothing is persisted mid-exchange -- the whole
+                # exchange is folded once at step-out (see _fold_exchange).
+                current_exchange.append(
+                    self._assistant_message(
                         tool_calls,
                         decision.reasoning_content if replay_reasoning else None,
                     )
                 )
-                prefix.extend(self._tool_result_messages(last_tool_results))
+                current_exchange.extend(self._tool_messages(last_tool_results))
 
-                # Threshold-triggered compaction. Caching makes re-sending full
-                # tool content cheap, so we don't prune per round; only when one
-                # turn's live context grows large do we condense it into a
-                # summary and continue as a fresh internal segment. Takes
-                # precedence over the round cap while compactions remain.
-                est_tokens = len(json.dumps(prefix, ensure_ascii=False, default=str)) // 4
-                if (
-                    not force_respond
-                    and compaction_count < MAX_COMPACTIONS
-                    and est_tokens >= COMPACTION_TRIGGER_TOKENS
-                ):
-                    await _progress(f"Condensing context... [{self.agent_id}]")
-                    summary = await self._compact_segment(prefix, run_context, user_input)
-                    if summary:
-                        compaction_count += 1
-                        self.memory.set_context_summary(summary)
-                        debug_log(
-                            "Compaction",
-                            f"Segment {compaction_count}/{MAX_COMPACTIONS}: "
-                            f"condensed ~{est_tokens} tok of live context.",
-                            extra=f"agent={self.agent_id}",
-                        )
-                        prefix = self.prompt_assembler.build_prefix_messages(
-                            [{"role": "user", "content": user_input}]
-                        )
-                        context_summary = summary
-                        instruction = (
-                            "The earlier tool history was condensed into the context "
-                            "summary above, which you wrote to be self-sufficient. "
-                            "Continue working toward the user's request using that "
-                            "summary; only re-read a file if you genuinely failed to "
-                            "capture something you need from it."
-                        )
-                        action_count = 0
-                        next_log_extra = "post-compaction segment"
-                        continue
-
+                # No intra-exchange compaction: the current exchange grows at
+                # full fidelity and prefix caching keeps re-sending it cheap.
+                # Force a final response when the round cap is reached, or as an
+                # overflow guard when live context nears the context window (so a
+                # runaway turn can't exceed it -- the threshold leaves headroom
+                # for the forced final call's own input+output).
+                est_tokens = (
+                    len(json.dumps(history_messages, ensure_ascii=False, default=str))
+                    + len(json.dumps(current_exchange, ensure_ascii=False, default=str))
+                ) // 4
+                overflow = est_tokens >= CONTEXT_OVERFLOW_TOKENS
                 max_rounds = self.agent_spec.max_tool_rounds
-                if action_count >= max_rounds:
+                if overflow or action_count >= max_rounds:
+                    reason = (
+                        f"live context ~{est_tokens} tok near the window limit"
+                        if overflow
+                        else f"reached {action_count}/{max_rounds} tool rounds"
+                    )
                     debug_log(
                         "Action Cap",
-                        (
-                            f"Reached {action_count}/{max_rounds} tool rounds. "
-                            "Requesting a final text response with no more tool calls."
-                        ),
+                        f"{reason}; requesting a final text response with no more tool calls.",
                         extra=f"agent={self.agent_id}",
                     )
                     instruction = (
-                        "You have reached the maximum number of action attempts. "
                         "Do not call any more tools. Respond now with a summary "
                         "of what happened."
                     )
@@ -385,6 +340,12 @@ class AgentLoop:
 
         if not final_response:
             final_response = self._summarize_tool_results(last_tool_results)
+
+        # Step-out: fold the finished exchange (compacted) into the durable log.
+        # Uses the core response text, before display banners/footers are added.
+        self.memory.add_exchange(
+            self._fold_exchange(user_input, tool_rounds, final_response)
+        )
 
         if hit_tool_cap and not suppress_usage_footer:
             final_response = (
@@ -437,7 +398,6 @@ class AgentLoop:
         if not suppress_usage_footer:
             final_response += usage_msg
 
-        self.memory.clear_session_note()
         output_title = "Loop -> Parent Agent" if is_subagent else "Loop -> User"
         debug_log(
             output_title,
@@ -449,28 +409,6 @@ class AgentLoop:
 
         return final_response
 
-    async def _compact_segment(
-        self, messages: list[dict], run_context: RunContext, user_input: str
-    ) -> Optional[str]:
-        """Summarize the current live context so the turn can continue clean.
-
-        One forced-text model call (no tools). Returns the summary text, or
-        None if the call failed or produced nothing usable. The call's usage is
-        tracked, but it is never persisted as conversation history -- only the
-        resulting summary is kept, via ``set_context_summary``.
-        """
-        probe = messages + [{"role": "user", "content": COMPACTION_INSTRUCTION}]
-        out = await self.brain.decide(
-            probe,
-            tool_definitions=[],
-            session_id=self.memory.session_id,
-            log_extra="compaction",
-            usage_tracker=run_context.usage,
-        )
-        if out.get("error"):
-            return None
-        return (out["decision"].text_response or "").strip() or None
-
     @staticmethod
     def _summarize_tool_results(results: List[ToolResult]) -> str:
         if not results:
@@ -480,8 +418,63 @@ class AgentLoop:
             parts.append(f"{r.name}: {r.content}")
         return "\n".join(parts)
 
+    def _fold_exchange(
+        self,
+        user_input: str,
+        tool_rounds: list[tuple[list[ToolCall], list[ToolResult]]],
+        final_text: str,
+    ) -> list[dict]:
+        """Fold the finished exchange into compact chat messages for the log.
+
+        Shape per exchange: the user message; then per round one skeleton
+        assistant anchor (real tool names, synthetic ids, empty args -- just
+        enough to keep every tool message legally paired) followed by its
+        compacted tool results; then the final assistant text. The real call
+        args live inside each tool message's compact text (capped), not in the
+        anchor, so a large write payload can't bloat history.
+        """
+        messages = [self._user_message(user_input)]
+        seq = 0
+        for calls, results in tool_rounds:
+            fold_ids: dict[str, str] = {}
+            anchor: list[dict] = []
+            for call in calls:
+                seq += 1
+                fold_ids[call.id] = f"h{seq}"
+                anchor.append(
+                    {
+                        "id": f"h{seq}",
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": "{}"},
+                    }
+                )
+            messages.append({"role": "assistant", "tool_calls": anchor})
+            calls_by_id = {c.id: c for c in calls}
+            for result in results:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": fold_ids[result.tool_call_id],
+                        "content": self.tool_registry.compact_interaction(
+                            calls_by_id.get(result.tool_call_id), result
+                        ),
+                    }
+                )
+        messages.append({"role": "assistant", "content": final_text})
+        return messages
+
+    # -- Current-exchange message builders ---------------------------------
+    # These produce the live, full-fidelity chat messages for the current
+    # exchange, in OpenAI chat-role vocabulary (system/user/assistant/tool) --
+    # the same vocabulary the durable log stores, so there is no translation
+    # anywhere: the log IS the replay format (see _fold_exchange above).
+
     @staticmethod
-    def _assistant_tool_message(tool_calls: List[ToolCall], reasoning_content: Optional[str] = None) -> dict:
+    def _user_message(text: str) -> dict:
+        return {"role": "user", "content": str(text)}
+
+    @staticmethod
+    def _assistant_message(tool_calls: List[ToolCall], reasoning_content: Optional[str] = None) -> dict:
         msg: dict = {
             "role": "assistant",
             "tool_calls": [
@@ -501,7 +494,7 @@ class AgentLoop:
         return msg
 
     @staticmethod
-    def _tool_result_messages(tool_results: List[ToolResult]) -> list[dict]:
+    def _tool_messages(tool_results: List[ToolResult]) -> list[dict]:
         return [
             {
                 "role": "tool",

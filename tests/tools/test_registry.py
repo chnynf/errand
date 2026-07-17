@@ -11,7 +11,6 @@ from textwrap import dedent
 import pytest
 
 from paw.contracts.types import ToolCall, ToolResult
-from paw.sessions.memory import Memory
 from paw.tools.registry import ToolRegistry
 
 
@@ -150,96 +149,67 @@ def test_execute_unknown_tool_raises(tools_dir: Path):
         asyncio.run(registry.execute("nope", {}))
 
 
-# --- compact_result: the contract surface between tools and memory ---------
+# --- compact_interaction: the standard folded text for one call + result ----
 
-def _record_renders(record: dict) -> str:
-    """A record produced by the registry must be renderable by Memory."""
-    return Memory._render_tool_record(record)
+def test_compact_interaction_standard_format(tools_dir: Path):
+    # Uniform across tools: "tool call: name(args)\ntool result: body [N total]".
+    registry = ToolRegistry(tools_dir=tools_dir)
+    call = ToolCall(id="tc-1", name="read_file", params={"path": "INDEX.md"})
+    result = ToolResult(tool_call_id="tc-1", name="read_file", content="# Agent KB\nsecret soul")
+
+    text = registry.compact_interaction(call, result)
+
+    assert text.startswith("tool call: read_file(path='INDEX.md')")
+    # Under the 500-char cap, the result is kept whole with the total noted.
+    assert "tool result: # Agent KB\nsecret soul [22 chars total]" in text
 
 
-def test_compact_result_default_compactor_truncates_long_content(tools_dir: Path):
+def test_compact_interaction_truncates_long_result_body(tools_dir: Path):
     registry = ToolRegistry(tools_dir=tools_dir)
     call = ToolCall(id="tc-1", name="add", params={"a": 1, "b": 2})
     result = ToolResult(tool_call_id="tc-1", name="add", content="x" * 1200)
 
-    record = registry.compact_result(call, result, preview_limit=500)
+    text = registry.compact_interaction(call, result)
 
-    assert record["tool_call_id"] == "tc-1"
-    assert record["name"] == "add"
-    assert record["params"] == {"a": 1, "b": 2}
-    assert record["content_chars"] == 1200
-    assert record["preview"].endswith("... [truncated]")
-    # The record must also be renderable by Memory's history replay.
-    assert "[truncated]" in _record_renders(record)
+    assert "x" * 500 in text          # first 500 kept
+    assert "x" * 501 not in text      # cut at 500
+    assert "… [1200 chars total]" in text
 
 
-def test_compact_result_uses_registered_compactor_for_file_tools():
-    # Uses the real paw/tools/ directory so the files.py COMPACTORS register.
-    registry = ToolRegistry()
+def test_compact_interaction_caps_long_arg_values(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir)
     call = ToolCall(
-        id="tc-1",
-        name="write_file",
+        id="tc-1", name="write_file",
         params={"path": "notes/big.md", "content": "y" * 5000},
     )
-    result = ToolResult(
-        tool_call_id="tc-1",
-        name="write_file",
-        content="Wrote 5000 bytes to /kb/notes/big.md.",
-    )
+    result = ToolResult(tool_call_id="tc-1", name="write_file", content="Wrote 5000 bytes.")
 
-    record = registry.compact_result(call, result)
+    call_line = registry.compact_interaction(call, result).splitlines()[0]
 
-    # Per-tool compactor strips the large payload from persisted params.
-    assert "content" not in record["params"]
-    assert record["params"]["path"] == "notes/big.md"
-    assert record["result_ref"] == {"type": "file", "path": "notes/big.md"}
-    assert record["content_chars"] == len(result.content)
-    # Memory must be able to render this record without knowing the tool name.
-    rendered = _record_renders(record)
-    assert "Wrote 5000 bytes" in rendered
+    assert "path='notes/big.md'" in call_line
+    assert "y" * 5000 not in call_line   # huge arg capped, not dumped
+    assert "…" in call_line
+    assert len(call_line) < 300
 
 
-def test_compact_result_read_file_error_surfaces_in_record():
-    registry = ToolRegistry()
+def test_compact_interaction_error_flows_through_as_result(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir)
     call = ToolCall(id="tc-2", name="read_file", params={"path": "missing.md"})
     result = ToolResult(
         tool_call_id="tc-2", name="read_file", content="Error: Not a file: /kb/missing.md"
     )
 
-    record = registry.compact_result(call, result)
-
-    assert record["result_ref"]["type"] == "file"
-    assert record["error"].startswith("Error:")
-    # Errors take priority in the renderer.
-    assert _record_renders(record).startswith("Error:")
+    assert "tool result: Error: Not a file: /kb/missing.md" in registry.compact_interaction(call, result)
 
 
-def test_compact_result_list_dir_counts_entries():
-    registry = ToolRegistry()
-    call = ToolCall(id="tc-3", name="list_dir", params={"path": ""})
-    result = ToolResult(
-        tool_call_id="tc-3", name="list_dir", content="a.md\nb.md\n\nc.md/\n"
-    )
+def test_compact_interaction_handles_missing_call(tools_dir: Path):
+    registry = ToolRegistry(tools_dir=tools_dir)
+    result = ToolResult(tool_call_id="tc-9", name="add", content="5")
 
-    record = registry.compact_result(call, result)
+    text = registry.compact_interaction(None, result)
 
-    assert record["entry_count"] == 3
-    assert record["result_ref"] == {"type": "directory", "path": ""}
-    # When result_ref is present the renderer prefers it (matches old behavior).
-    assert "directory ref" in _record_renders(record)
-
-
-def test_compact_result_tool_without_compactor_falls_back_to_default():
-    # `calculate` ships without a COMPACTORS entry — the generic default applies.
-    registry = ToolRegistry()
-    call = ToolCall(id="tc-4", name="calculate", params={"expression": "2 + 2"})
-    result = ToolResult(tool_call_id="tc-4", name="calculate", content="5")
-
-    record = registry.compact_result(call, result)
-
-    assert record["preview"] == "5"
-    assert "result_ref" not in record
-    assert "error" not in record
+    assert text.startswith("tool call: unknown()")
+    assert "tool result: 5 [1 chars total]" in text
 
 
 def test_tool_summary_carries_cross_tool_nudges():

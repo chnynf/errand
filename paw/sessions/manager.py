@@ -1,11 +1,9 @@
 """SessionManager: cache AgentSession instances and serialize work per session."""
 
 import asyncio
-import time
 
 from paw.config import PawConfig, load_paw_config
 from paw.sessions.session import AgentSession
-from paw.sessions.memory import IDLE_BOUNDARY_NOTE, RELOAD_BOUNDARY_NOTE
 
 
 class SessionManager:
@@ -55,14 +53,7 @@ class SessionManager:
                 agent_id=resolved_agent_id,
                 delegation_depth=delegation_depth,
             )
-            self._mark_idle_boundary(session)
             return await session.process(text, metadata=metadata)
-
-    def _mark_idle_boundary(self, session: AgentSession) -> None:
-        hours = self._config.sessions.idle_boundary_hours
-        last_activity = session.last_activity_at()
-        if hours and last_activity and time.time() - last_activity > hours * 3600:
-            session.add_session_note(IDLE_BOUNDARY_NOTE)
 
     async def archive(
         self,
@@ -86,12 +77,10 @@ class SessionManager:
         *,
         soul: bool = True,
         profile: bool = True,
-        note: str = RELOAD_BOUNDARY_NOTE,
     ) -> int:
-        """Clear prompt caches for cached sessions and mark a reload boundary."""
+        """Clear prompt caches for cached sessions; they reload on next prompt."""
         for session in self._sessions.values():
             session.reload_prompt_resources(soul=soul, profile=profile)
-            session.add_session_note(note)
         return len(self._sessions)
 
     async def shutdown(self) -> None:

@@ -38,14 +38,10 @@ DEFAULT_TZ = ZoneInfo("America/New_York")
 
 
 def _current_context() -> str:
-    """Return a short header with the current time in US East and UTC."""
+    """One concise time line: US East (human/scheduling) plus UTC (canonical)."""
     utc = datetime.now(timezone.utc)
     east = utc.astimezone(DEFAULT_TZ)
-    return (
-        "CURRENT CONTEXT:\n"
-        f"- US East: {east.strftime('%Y-%m-%d, %A, %H:%M %Z')}\n"
-        f"- UTC: {utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-    )
+    return f"Now: {east.strftime('%Y-%m-%d %H:%M %Z')} ({utc.strftime('%H:%M')} UTC)"
 
 
 class PromptAssembler:
@@ -109,60 +105,44 @@ class PromptAssembler:
         self,
         *,
         context_summary: str | None = None,
-        session_note: str | None = None,
         instruction: str | None = None,
     ) -> list[dict]:
         """Build volatile per-turn context messages outside the cached system prompt."""
         parts = [_current_context()]
         if context_summary:
             parts.append(f"CONTEXT SUMMARY:\n{context_summary}")
-        if session_note:
-            parts.append(f"SESSION NOTE:\n{session_note}")
         if instruction:
             parts.append(f"INSTRUCTION:\n{instruction}")
         return [{"role": "user", "content": "\n\n".join(parts)}]
 
-    def build_prefix_messages(self, history_messages: list[dict]) -> list[dict]:
-        """Return the stable, append-only prefix: system prompt + history.
+    def build_prompt(
+        self,
+        history_messages: list[dict],
+        current_exchange: list[dict],
+        *,
+        context_summary: str | None = None,
+        instruction: str | None = None,
+    ) -> list[dict]:
+        """Assemble one model call as four explicit sections, in order:
 
-        This is the portion that must stay byte-identical across calls to remain
-        prefix-cacheable. The loop appends each tool round to this list and keeps
-        the volatile per-turn context (see ``build_context_messages``) OUT of it,
-        re-appending that context as the final message on every model call. That
-        way the prefix grows monotonically -- within a turn and across turns --
-        instead of being broken by a volatile block wedged into its middle.
+        1. system            -- soul, indexes, tool catalog (static, cacheable)
+        2. history           -- prior exchanges, compacted (from memory)
+        3. current_exchange  -- this exchange, full and uncompacted (live)
+        4. context           -- time + rolling summary + instruction (volatile)
+
+        The cacheable prefix is sections 1-3: it grows append-only within a turn
+        (only ``current_exchange`` gains messages) and stays byte-identical
+        across rounds, so provider prefix caching keeps re-sending it cheap. The
+        volatile context is placed LAST so it can never break that prefix -- a
+        time-varying block wedged earlier would act as a cache barrier and
+        re-bill everything after it on every call.
         """
         return [
             {"role": "system", "content": self.build_system_prompt()},
             *history_messages,
-        ]
-
-    def build_messages(
-        self,
-        history_messages: list[dict],
-        *,
-        context_summary: str | None = None,
-        session_note: str | None = None,
-        instruction: str | None = None,
-    ) -> list[dict]:
-        """Assemble the full message list for one model call.
-
-        Order: system prompt -> conversation history -> per-turn context.
-
-        The volatile per-turn context (current time, rolling summary,
-        instruction) is placed LAST, after history, so the stable prefix is
-        ``system prompt + prior history``. That prefix grows monotonically
-        across turns and stays eligible for provider prefix caching (Gemini's
-        implicit cache, etc.). Putting the time-varying context up front --
-        right after the system prompt -- instead acts as a cache barrier: it
-        changes every turn, so nothing after it can be prefix-matched and the
-        whole growing history is re-billed fresh on every call.
-        """
-        return [
-            *self.build_prefix_messages(history_messages),
+            *current_exchange,
             *self.build_context_messages(
                 context_summary=context_summary,
-                session_note=session_note,
                 instruction=instruction,
             ),
         ]

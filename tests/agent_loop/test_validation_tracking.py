@@ -33,17 +33,18 @@ class _Registry:
     async def execute(self, name, params, context=None):  # pragma: no cover - not reached
         return "ok"
 
-    def compact_result(self, call, result, preview_limit=500):
-        return {"tool_call_id": result.tool_call_id, "name": result.name,
-                "params": {}, "content_chars": len(result.content), "preview": result.content[:60]}
+    def compact_interaction(self, call, result):
+        return f"tool call: {result.name}()\ntool result: {result.content[:60]}"
 
 
 class _PromptAssembler:
-    def build_prefix_messages(self, history):
-        return [{"role": "system", "content": "s"}, *history]
-
-    def build_context_messages(self, *, context_summary=None, session_note=None, instruction=None):
-        return [{"role": "user", "content": f"CTX:{instruction}"}]
+    def build_prompt(self, history_messages, current_exchange, *, context_summary=None, instruction=None):
+        return [
+            {"role": "system", "content": "s"},
+            *history_messages,
+            *current_exchange,
+            {"role": "user", "content": f"CTX:{instruction}"},
+        ]
 
 
 class _Brain:

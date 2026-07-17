@@ -3,6 +3,15 @@
 Session JSON files live under ``paw/sessions/_data/``. The
 ``_data/`` folder is git-ignored runtime state, separate from the
 Python modules in the same package.
+
+The history is a single unified log of provider-ready chat messages
+(``system``/``user``/``assistant``/``tool`` vocabulary -- the same format the
+model API consumes). Each finished exchange is folded ONCE at step-out by the
+agent loop (skeleton tool-call anchors + compacted tool results, see
+``AgentLoop._fold_exchange``) and appended here via ``add_exchange``. Replay is
+therefore a plain windowed slice: no role translation, no per-record rendering.
+The current, in-flight exchange never lives here -- the loop carries it live at
+full fidelity until it finishes.
 """
 
 from __future__ import annotations
@@ -11,12 +20,22 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 import aiofiles
 
 _SESSION_DIR = Path(__file__).resolve().parent / "_data"
 _MAX_HISTORY_ENTRIES = 400
+# History window sent to the model, budgeted in tokens (~chars/4). Exchanges
+# vary in length, so we cap by tokens rather than a fixed entry count.
+_HISTORY_TOKEN_BUDGET = 10_000
+# When over budget, drop the oldest exchanges this many at a time. Dropping in
+# groups (not one-by-one) keeps the window start stable across several
+# exchanges, so the system+history prefix stays byte-identical and provider
+# prefix caching survives. We only drop while >3 exchanges remain, so at least
+# one exchange always survives (4 - 3 = 1).
+_HISTORY_DROP_EXCHANGES = 3
+_HISTORY_MIN_EXCHANGES = 1
 # Characters that are illegal in Windows filenames (e.g. ``:`` in WeChat and
 # scheduled session ids). Mapped to ``_`` so files stay cross-platform safe.
 _FILENAME_ILLEGAL = '<>:"/\\|?*'
@@ -26,47 +45,13 @@ def _safe_stem(session_id: str) -> str:
     return "".join("_" if c in _FILENAME_ILLEGAL else c for c in session_id)
 
 
-# Marker LiteLLM uses to smuggle a provider "thought signature" into a
-# tool_call id (Gemini 3: ``call_xxx__thought__<base64 blob>``). The blob can
-# be tens of thousands of tokens and is only meaningful within the live turn;
-# persisting and re-sending it across turns bloats every subsequent request.
-_SIGNATURE_MARKER = "__thought__"
-
-
-def strip_tool_call_signature(tool_call_id: str) -> str:
-    """Return the stable ``call_xxx`` handle, dropping any thought signature.
-
-    Paw never needs the signature once a turn is persisted: history is
-    replayed only to give the model prior context, and the assistant tool_call
-    id and its matching tool-result id are stripped identically, so the message
-    sequence stays valid. For providers that return plain ids (no marker) this
-    is a no-op, so the fix is safe across all models.
-    """
-    if not tool_call_id:
-        return tool_call_id
-    marker = tool_call_id.find(_SIGNATURE_MARKER)
-    return tool_call_id[:marker] if marker != -1 else tool_call_id
-
-
-IDLE_BOUNDARY_NOTE = (
-    "There was a long idle gap in this conversation. Treat the current message "
-    "as a new topic if it does not appear related to the last exchange."
-)
-RELOAD_BOUNDARY_NOTE = (
-    "Runtime instructions were reloaded. Use the current system instructions "
-    "going forward; prior conversation remains available as history but may "
-    "reflect older instructions."
-)
-
-
 class Memory:
     """Persistent conversation history for one session.
 
-    History roles:
-        user    -- user's input
-        scheduled -- scheduled task firing through the agent
-        ai      -- AI response (tool_calls or text), with model in metadata
-        tool    -- tool execution results
+    Each history entry wraps one provider-ready chat message:
+    ``{"timestamp": <epoch>, "message": {"role": ..., ...}}``. An exchange is a
+    ``user`` message followed by its assistant/tool messages, ending at the next
+    ``user`` message; exchanges are appended whole via ``add_exchange``.
     """
 
     def __init__(self, session_id: str = "default", agent_id: str = "default"):
@@ -87,9 +72,15 @@ class Memory:
         if os.path.exists(self.session_file):
             try:
                 with open(self.session_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
             except json.JSONDecodeError:
                 return self._create_new_session()
+            # Pre-unified-log entries (old ai/tool record schema) are not
+            # replayable as chat messages; drop them rather than translate.
+            data["history"] = [
+                e for e in data.get("history", []) if isinstance(e.get("message"), dict)
+            ]
+            return data
         return self._create_new_session()
 
     def _create_new_session(self) -> Dict[str, Any]:
@@ -108,38 +99,27 @@ class Memory:
         }
 
     async def save_session(self) -> None:
-        if len(self.data["history"]) > _MAX_HISTORY_ENTRIES:
-            self.data["history"] = self.data["history"][-_MAX_HISTORY_ENTRIES:]
+        history = self.data["history"]
+        if len(history) > _MAX_HISTORY_ENTRIES:
+            # Trim on an exchange boundary so no tool message loses its anchor.
+            cut = len(history) - _MAX_HISTORY_ENTRIES
+            starts = self._exchange_starts()
+            boundary = next((s for s in starts if s >= cut), None)
+            if boundary is not None:
+                self.data["history"] = history[boundary:]
         async with aiofiles.open(self.session_file, "w", encoding="utf-8") as f:
             await f.write(json.dumps(self.data, indent=2, ensure_ascii=False))
 
-    def add_history(self, role: str, content: Any, metadata: Optional[Dict] = None) -> None:
-        if role == "ai" and isinstance(content, dict):
-            for call in content.get("tool_calls") or []:
-                if isinstance(call, dict) and call.get("id"):
-                    call["id"] = strip_tool_call_signature(call["id"])
-        entry = {
-            "timestamp": time.time(),
-            "role": role,
-            "content": content,
-            "metadata": metadata or {},
-        }
-        self.data["history"].append(entry)
+    def add_exchange(self, messages: list[dict]) -> None:
+        """Append one folded, finished exchange to the log.
 
-    def add_tool_results(self, records: Iterable[dict]) -> None:
-        """Persist already-compact tool-result records as one history entry.
-
-        Records must follow the compact-record schema (see
-        ``_render_tool_record``). The agent loop builds them via
-        ``ToolRegistry.compact_result`` so Memory stays decoupled from
-        individual tool names.
+        ``messages`` are provider-ready chat messages, starting with the
+        exchange's ``user`` message (the loop folds them at step-out).
         """
-        entries = list(records)
-        for rec in entries:
-            if rec.get("tool_call_id"):
-                rec["tool_call_id"] = strip_tool_call_signature(rec["tool_call_id"])
-        if entries:
-            self.add_history("tool", entries)
+        now = time.time()
+        self.data["history"].extend(
+            {"timestamp": now, "message": message} for message in messages
+        )
 
     def update_token_usage(self, usage: Dict[str, Any]) -> None:
         """Accumulate one API call's token counts into ``token_summary``.
@@ -162,127 +142,56 @@ class Memory:
             return float(history[-1].get("timestamp") or 0)
         return float(self.data.get("created_at") or 0) or None
 
-    def add_session_note(self, note: str) -> None:
-        self.data.setdefault("metadata", {})["session_note"] = note
+    @staticmethod
+    def _entry_tokens(entry: dict) -> int:
+        """Rough token estimate (~chars/4) for one persisted history entry."""
+        return len(json.dumps(entry["message"], ensure_ascii=False, default=str)) // 4
 
-    def clear_session_note(self) -> None:
-        self.data.setdefault("metadata", {}).pop("session_note", None)
+    def _exchange_starts(self) -> list[int]:
+        """Entry indices where each exchange begins (its ``user`` message).
 
-    def build_history_messages(self, recent_n: int = 20, chunk: int = 8) -> list[dict]:
-        """Build role-tagged chat messages from persisted compact history.
-
-        The window start is *quantized* to ``chunk``-sized steps instead of
-        sliding one entry per turn. A start that advances every turn shifts the
-        whole ``system + history`` prefix and defeats provider prefix caching
-        (Gemini's implicit cache, Anthropic breakpoints): only the static system
-        prompt stays cached and the entire history is re-billed each turn. A
-        start that holds steady for ``chunk`` turns keeps the prefix stable and
-        growing, so the cache is reused across turns and only refreshes on the
-        occasional jump. The window holds between ``recent_n`` and
-        ``recent_n + chunk - 1`` entries.
+        An exchange spans one such entry up to (but not including) the next, so
+        its anchor/tool messages never get split across the window edge.
         """
-        messages: list[dict] = []
+        return [
+            i
+            for i, e in enumerate(self.data["history"])
+            if e["message"].get("role") == "user"
+        ]
+
+    def _history_window_start(self, starts: list[int]) -> int:
+        """First entry index of the token-budgeted history window.
+
+        Keep the newest whole exchanges; while over budget and more than
+        ``_HISTORY_DROP_EXCHANGES + _HISTORY_MIN_EXCHANGES`` remain, drop the
+        oldest ``_HISTORY_DROP_EXCHANGES``. Dropping in groups keeps the start
+        stable across several exchanges so the prefix stays prefix-cacheable;
+        the floor keeps at least ``_HISTORY_MIN_EXCHANGES`` even if one is
+        oversized.
+        """
         full = self.data["history"]
-        if len(full) <= recent_n:
-            start = 0
-        else:
-            start = ((len(full) - recent_n) // chunk) * chunk
-        history = full[start:]
-        i = 0
-        while i < len(history):
-            entry = history[i]
-            role = entry["role"]
-            content = entry["content"]
-            if role in ("user", "scheduled"):
-                messages.append({"role": "user", "content": str(content)})
-                i += 1
-            elif role == "ai":
-                msg = self._ai_message(content)
-                if msg and not msg.get("tool_calls"):
-                    messages.append(msg)
-                elif msg and i + 1 < len(history) and history[i + 1]["role"] == "tool":
-                    tool_messages = self._matching_tool_messages(
-                        msg["tool_calls"],
-                        history[i + 1]["content"],
-                    )
-                    if len(tool_messages) == len(msg["tool_calls"]):
-                        messages.append(msg)
-                        messages.extend(tool_messages)
-                        i += 1
-                i += 1
-            elif role == "tool":
-                # A dangling compact tool entry means the recent history slice
-                # lost its assistant tool-call entry. Skip it rather than
-                # sending an invalid OpenAI message sequence.
-                i += 1
-            else:
-                i += 1
-        return messages
+        first = 0
+        window_tokens = sum(self._entry_tokens(e) for e in full[starts[first]:])
+        min_keep = _HISTORY_DROP_EXCHANGES + _HISTORY_MIN_EXCHANGES
+        while window_tokens > _HISTORY_TOKEN_BUDGET and len(starts) - first > min_keep:
+            dropped = full[starts[first]:starts[first + _HISTORY_DROP_EXCHANGES]]
+            window_tokens -= sum(self._entry_tokens(e) for e in dropped)
+            first += _HISTORY_DROP_EXCHANGES
+        return starts[first]
 
-    @staticmethod
-    def _ai_message(content: Any) -> dict | None:
-        if not isinstance(content, dict):
-            return {"role": "assistant", "content": str(content)}
-        tool_calls = content.get("tool_calls") or []
-        if tool_calls:
-            return {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": strip_tool_call_signature(call["id"]),
-                        "type": "function",
-                        "function": {
-                            "name": call["name"],
-                            "arguments": json.dumps(call.get("params", {})),
-                        },
-                    }
-                    for call in tool_calls
-                ],
-            }
-        text = content.get("text_response")
-        return {"role": "assistant", "content": text} if text else None
+    def build_history_messages(self) -> list[dict]:
+        """Return the windowed history as provider-ready chat messages.
 
-    @classmethod
-    def _matching_tool_messages(cls, tool_calls: list[dict], records: Any) -> list[dict]:
-        # ``tool_calls`` ids are already stripped by ``_ai_message``; strip the
-        # record ids too so legacy sessions (full ids on disk) still match.
-        expected_ids = {call["id"] for call in tool_calls}
-        messages = []
-        for record in records:
-            rid = strip_tool_call_signature(record["tool_call_id"])
-            if rid in expected_ids:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": rid,
-                        "content": cls._render_tool_record(record),
-                    }
-                )
-        return messages
-
-    @staticmethod
-    def _render_tool_record(record: dict[str, Any]) -> str:
-        """Render one compact tool record into a model-facing tool message body.
-
-        Compact-record schema (owned by Memory; produced by
-        ``ToolRegistry.compact_result``):
-
-        - Required: ``tool_call_id``, ``name``, ``content_chars``, ``params``.
-        - Optional, checked in priority order: ``error`` > ``preview`` >
-          ``result_ref`` (with ``type``/``path``) > ``entry_count``.
-          When none are present the renderer falls back to a chars summary.
+        The log already stores folded chat messages, so this is a plain slice:
+        budgeted by tokens (see ``_history_window_start``) and cut only on
+        exchange boundaries, so skeleton-anchor/tool pairs stay intact and the
+        window start holds steady across exchanges for prefix caching.
         """
-        if record.get("error"):
-            return str(record["error"])
-        if record.get("preview"):
-            return str(record["preview"])
-        if ref := record.get("result_ref"):
-            path = ref.get("path", "")
-            chars = record.get("content_chars", 0)
-            return f"{record['name']}: result stored as {ref['type']} ref {path} ({chars} chars)"
-        if "entry_count" in record:
-            return f"{record['name']}: {record['entry_count']} entries"
-        return f"{record['name']}: {record.get('content_chars', 0)} chars"
+        starts = self._exchange_starts()
+        if not starts:
+            return []
+        start = self._history_window_start(starts)
+        return [e["message"] for e in self.data["history"][start:]]
 
     async def archive_session(self, start_new: bool = True) -> None:
         if os.path.exists(self.session_file):

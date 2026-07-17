@@ -33,9 +33,8 @@ def test_context_messages_include_current_context():
     assembler = PromptAssembler()
     messages = assembler.build_context_messages()
     assert messages[0]["role"] == "user"
-    assert "CURRENT CONTEXT:" in messages[0]["content"]
-    assert "US East:" in messages[0]["content"]
-    assert "UTC:" in messages[0]["content"]
+    assert messages[0]["content"].startswith("Now:")
+    assert "UTC)" in messages[0]["content"]
 
 
 def test_system_prompt_includes_agent_profile_contents(tmp_path):
@@ -134,16 +133,21 @@ def test_soul_and_profile_blocks_are_cached(tmp_path):
     assert assembler._soul_block == cached
 
 
-def test_build_messages_places_volatile_context_after_history():
-    """Caching invariant: stable prefix is system + history; volatile per-turn
-    context (time/summary/instruction) goes last so it can't break the prefix."""
+def test_build_prompt_orders_the_four_sections():
+    """Caching invariant: stable prefix is system + history + current_exchange;
+    volatile per-turn context (time/summary/instruction) goes last so it can't
+    break the prefix."""
     assembler = PromptAssembler()
     history = [
         {"role": "user", "content": "apply the plan"},
         {"role": "assistant", "content": "done"},
     ]
-    messages = assembler.build_messages(
+    current_exchange = [
+        {"role": "user", "content": "now do the next thing"},
+    ]
+    messages = assembler.build_prompt(
         history,
+        current_exchange,
         context_summary="rolling summary",
         instruction="Decide whether to call a tool or respond directly.",
     )
@@ -152,24 +156,24 @@ def test_build_messages_places_volatile_context_after_history():
     # History sits immediately after the system prompt (cacheable prefix).
     assert messages[1] == {"role": "user", "content": "apply the plan"}
     assert messages[2] == {"role": "assistant", "content": "done"}
+    # The current exchange follows history, before the volatile context.
+    assert messages[3] == {"role": "user", "content": "now do the next thing"}
     # The time-varying context is the final message.
     last = messages[-1]
     assert last["role"] == "user"
-    assert "CURRENT CONTEXT:" in last["content"]
+    assert "Now:" in last["content"]
     assert "CONTEXT SUMMARY:\nrolling summary" in last["content"]
     assert "INSTRUCTION:\nDecide whether" in last["content"]
 
 
-def test_context_messages_include_summary_note_and_instruction():
+def test_context_messages_include_summary_and_instruction():
     assembler = PromptAssembler()
     messages = assembler.build_context_messages(
         context_summary="ctx body",
-        session_note="note body",
         instruction="do thing",
     )
     content = messages[0]["content"]
-    assert "CURRENT CONTEXT:" in content
+    assert "Now:" in content
     assert "CONTEXT SUMMARY:\nctx body" in content
-    assert "SESSION NOTE:\nnote body" in content
     assert "INSTRUCTION:\ndo thing" in content
-    assert content.index("CURRENT CONTEXT:") < content.index("CONTEXT SUMMARY:")
+    assert content.index("Now:") < content.index("CONTEXT SUMMARY:")

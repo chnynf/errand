@@ -9,15 +9,13 @@ plugin, except for files that are either:
 
 Public module-level functions become tools. Schemas are generated from
 the function signature; descriptions come from the function docstring.
+Tools are plain functions -- they know nothing about how their results
+are stored in history.
 
-A tool module may optionally export a top-level ``COMPACTORS`` dict
-mapping tool name to a ``(result, params, preview_limit) -> dict``
-function that returns the *tool-specific fields* of the compact memory
-record. The registry merges those at load time and exposes
-``compact_result`` for the agent loop to call before pushing tool
-results into session memory. Tools without a compactor fall back to a
-generic preview, so tool authors only opt in when they want a custom
-history shape.
+Compaction is uniform and lives here, not in the tools: ``compact_interaction``
+turns any tool call + result into one standard text (see
+``_compact_tool_interaction``) that the agent loop uses when folding a
+finished exchange into session memory. No per-tool customization.
 
 This is the local equivalent of an MCP tool server; the same Python
 functions can later be wrapped in a stdio MCP server without changing
@@ -111,7 +109,6 @@ class ToolRegistry:
     ):
         self._tools_dir = tools_dir or TOOLS_DIR
         self._tools: dict[str, Callable] = {}
-        self._compactors: dict[str, Callable] = {}
         self._descriptions: list[dict[str, str]] = []
         self._load()
         if can_delegate is not None:
@@ -122,7 +119,6 @@ class ToolRegistry:
 
     def _load(self) -> None:
         self._tools.clear()
-        self._compactors.clear()
         self._descriptions.clear()
 
         for file_path in sorted(glob.glob(os.path.join(str(self._tools_dir), "*.py"))):
@@ -150,10 +146,6 @@ class ToolRegistry:
                         "doc": (inspect.getdoc(obj) or "No description provided.").strip(),
                     }
                 )
-
-            module_compactors = getattr(module, "COMPACTORS", None)
-            if isinstance(module_compactors, dict):
-                self._compactors.update(module_compactors)
 
     def _patch_delegation_description(self, can_delegate: list[str]) -> None:
         """Append the caller's allowed delegate IDs to the invoke_agent description."""
@@ -366,36 +358,48 @@ class ToolRegistry:
             f"{TOOL_USE_GUIDANCE}"
         )
 
-    def compact_result(
-        self,
-        call: ToolCall | None,
-        result: ToolResult,
-        preview_limit: int = 500,
-    ) -> dict[str, Any]:
-        """Build a compact memory record for one tool result.
+    def compact_interaction(self, call: ToolCall | None, result: ToolResult) -> str:
+        """The standard compacted text for one tool call + result.
 
-        Returns a dict shaped for ``Memory._render_tool_record``: always carries
-        ``tool_call_id``, ``name``, ``params``, ``content_chars``; optionally
-        carries ``preview``, ``error``, ``result_ref``, or ``entry_count``
-        depending on the tool's registered compactor (or the generic default).
+        Uniform across every tool -- no per-tool customization. The agent loop
+        uses this when folding a finished exchange into history.
         """
-        params = call.params if call else {}
-        record: dict[str, Any] = {
-            "tool_call_id": result.tool_call_id,
-            "name": result.name,
-            "params": params,
-            "content_chars": len(result.content),
-        }
-        compactor = self._compactors.get(result.name, _default_compactor)
-        record.update(compactor(result, params, preview_limit))
-        return record
+        return _compact_tool_interaction(call, result)
 
 
-def _default_compactor(result: ToolResult, params: dict[str, Any], preview_limit: int) -> dict[str, Any]:
-    """Generic compactor: truncated preview with an ellipsis marker when cut."""
-    content = result.content
-    preview = (
-        content if len(content) <= preview_limit
-        else content[:preview_limit].rstrip() + "... [truncated]"
+# Uniform compaction limits: the tool-call arg values and the result body are
+# each truncated so a large read/write can't bloat history.
+_ARG_CHAR_CAP = 100
+_RESULT_CHAR_CAP = 500
+
+
+def _format_call(call: ToolCall | None) -> str:
+    """One line: ``name(key=repr, ...)`` with each arg value capped."""
+    if call is None:
+        return "unknown()"
+    parts = []
+    for key, value in (call.params or {}).items():
+        rendered = repr(value)
+        if len(rendered) > _ARG_CHAR_CAP:
+            rendered = rendered[:_ARG_CHAR_CAP] + "…"
+        parts.append(f"{key}={rendered}")
+    return f"{call.name}({', '.join(parts)})"
+
+
+def _compact_tool_interaction(call: ToolCall | None, result: ToolResult) -> str:
+    """Standard, tool-agnostic rendering of one tool call + its result:
+
+        tool call: read_file(path='INDEX.md')
+        tool result: <first 500 chars of the result>… [2300 chars total]
+
+    The result is truncated to ``_RESULT_CHAR_CAP`` with the full size noted, so
+    history keeps the gist without carrying the whole output.
+    """
+    total = len(result.content)
+    body = result.content
+    if total > _RESULT_CHAR_CAP:
+        body = body[:_RESULT_CHAR_CAP] + "…"
+    return (
+        f"tool call: {_format_call(call)}\n"
+        f"tool result: {body} [{total} chars total]"
     )
-    return {"preview": preview}

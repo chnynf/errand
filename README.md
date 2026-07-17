@@ -237,78 +237,134 @@ python -m paw --debug
 `PAW_KNOWLEDGE_ROOTS` uses the OS path separator (`:` on macOS/Linux) and
 maps into the `kb` scope.
 
-## Session Memory Model
+## Context & Memory Design
 
-Paw separates memory into four horizons. Keep these distinct when changing
-the loop, tools, or prompt assembly.
+**One vocabulary, one log.** Everything — the live prompt and the durable
+history — speaks provider-ready chat messages (`system` / `user` / `assistant`
+/ `tool`). The session log stores exactly what is replayed to the model: the
+log *is* the prompt history. No translation layers.
 
-### 1. Audit Log
-
-The session JSON stores an append-only record of important runtime events:
-user input, assistant decisions, compact tool results, token usage metadata,
-and final context summary state. This is for debugging, replay, accounting,
-and inspection. It is **not** copied wholesale into the next model prompt.
-
-Large retention policy is intentionally separate from prompt behavior. A later
-pruning/archival pass can cap active session files or move older events into
-compressed archives without changing what the model sees.
-
-### 2. Prompt History
-
-The prompt receives only the recent visible conversation:
+### Every model call is four sections, in order
 
 ```text
-RECENT CONVERSATION:
-USER: ...
-AI: ...
+1. system            — soul, indexes, tool catalog          (static)
+2. history           — prior exchanges, folded compact      (from the log)
+3. current exchange  — this exchange, live, full fidelity   (in memory)
+4. context           — time + rolling summary, very short   (volatile, last)
 ```
 
-Internal tool calls, tool results, model retry errors, and system feedback are
-not regular conversation and should not appear here. Failed model calls that do
-not produce a valid decision should remain audit/debug events only.
+Sections 1–3 form a stable, append-only prefix: within an exchange only
+section 3 grows, across exchanges only section 2 grows, and the volatile block
+stays last — so provider prefix caching makes re-sending the growing context
+cheap. (Built by `PromptAssembler.build_prompt` in `paw/agent_loop/`.)
 
-### 3. Context Summary
+### Within an exchange: append at full fidelity
 
-`context_summary` is the durable compressed state of the session. It should
-capture stable facts the model needs beyond the recent conversation window:
-the user's goal, important preferences, decisions already made, current task
-state, unresolved TODOs, and relevant constraints.
+An **exchange** is one user input through one final answer; it can span many
+tool rounds. Each step is appended as-is to the current-exchange section: your
+message, the AI's tool calls, complete tool results, the AI's next step. The
+model always works with exact content — a file read this turn is present
+verbatim while the turn lasts. Two guards keep a turn bounded: a tool-round cap
+and a context-window overflow stop, both of which ask the model to answer with
+what it has.
 
-It should not contain full tool outputs, token usage, transient retry noise, or
-copies of files that already live on disk. If the model does not provide a new
-summary for a turn, the previous summary remains in place.
+### At step-out: fold once
 
-### 4. Working Trace
+When the exchange finishes, `AgentLoop._fold_exchange` compacts it into a few
+chat messages and appends them to the log via `Memory.add_exchange`:
 
-The working trace is short-lived state for the current user turn and tool loop.
-It can include full current-turn tool results so a model can continue correctly
-after a tool call, including the case where one provider fails and another
-provider takes over mid-turn.
+- the user message, kept verbatim;
+- per tool round, a skeleton assistant anchor (real tool names, synthetic ids,
+  empty args — just enough to keep every tool message legally paired) followed
+  by one compacted tool message per result;
+- the final assistant answer, kept verbatim.
 
-The working trace is passed to the model only while resolving that turn. Once
-the assistant produces the final response, it is discarded; only compact audit
-records remain in session history.
+### Tool compaction is uniform
 
-### File Read Persistence Rule
+Tools are plain Python functions; they know nothing about history. The
+registry renders every call + result the same way
+(`ToolRegistry.compact_interaction`):
 
-Files are already durable memory. When the agent reads a file through
-`read_file`, the full contents may be returned to the model in the current
-working trace, but session history stores only a compact reference:
-
-```json
-{
-  "name": "read_file",
-  "params": {"path": "INDEX.md", "scope": "kb"},
-  "content_chars": 1234,
-  "result_ref": {"type": "file", "scope": "kb", "path": "INDEX.md"}
-}
+```text
+tool call: read_file(path='INDEX.md')          # arg values capped at 100 chars
+tool result: <first 500 chars>… [2300 chars total]
 ```
 
-Do not copy soul, profile, SOP, or other KB file bodies into long-term session
-memory. The configured `shared_soul` and `agent_profile` are injected by
-resolving the include markers in `runtime.md`; future turns should refer to
-loaded paths and the context summary for other KB resources. If exact text from
-an on-demand file is needed again, the model should call `read_file` again.
+If exact text from a file is needed again in a later exchange, the model calls
+`read_file` again — files themselves are the durable memory.
+
+### History is a token-budgeted window of whole exchanges
+
+Replay is a plain slice of the log, budgeted by tokens (default 10K; the
+system prompt is not counted). When over budget, the oldest exchanges drop in
+groups of 3, always keeping at least one — so the window start holds steady
+across turns and the cached prefix survives. Cuts land only on exchange
+boundaries, keeping anchor/tool pairs intact.
+
+### Continuity rides on a rolling summary
+
+The model ends each reply with a 2-sentence `Context:` line capturing goal and
+state. It is persisted as `context_summary` and shown in the volatile block on
+every call — cheap, always current, and independent of the history window.
+
+### Worked example
+
+One complete model call. Two exchanges are already in the log; the current
+exchange is mid-flight (the model already read a file, this call decides what
+to do next):
+
+```python
+messages = [
+  # ── 1. system (static, cached) ────────────────────────────────
+  {"role": "system", "content": "<soul + indexes + tool catalog>"},
+
+  # ── 2. history: exchange 1, folded at step-out ────────────────
+  {"role": "user", "content": "What's in my notes folder?"},
+  {"role": "assistant", "tool_calls": [          # skeleton anchor
+      {"id": "h1", "type": "function",
+       "function": {"name": "list_dir", "arguments": "{}"}}]},
+  {"role": "tool", "tool_call_id": "h1", "content":
+      "tool call: list_dir(path='notes')\n"
+      "tool result: ideas.md\npaw.md\nkb-paper.md [34 chars total]"},
+  {"role": "assistant", "content": "You have three notes: ideas, paw, kb-paper."},
+
+  # ── 2. history: exchange 2, no tools → folds to a plain pair ──
+  {"role": "user", "content": "Remind me what paw is?"},
+  {"role": "assistant", "content": "Paw is your personal agent harness project."},
+
+  # ── 3. current exchange (live, full fidelity) ─────────────────
+  {"role": "user", "content": "Summarize kb-paper.md for me."},
+  {"role": "assistant", "tool_calls": [          # real call, real args
+      {"id": "call_a7x", "type": "function",
+       "function": {"name": "read_file",
+                    "arguments": '{"path": "notes/kb-paper.md"}'}}]},
+  {"role": "tool", "tool_call_id": "call_a7x",
+   "content": "# KB vs RAG\n<...the ENTIRE 2300-char file, verbatim...>"},
+
+  # ── 4. volatile context (rebuilt every call, always last) ─────
+  {"role": "user", "content":
+      "Now: 2026-07-17 09:10 EDT (13:10 UTC)\n\n"
+      "CONTEXT SUMMARY:\nUser is reviewing their notes; paw project discussed."},
+]
+```
+
+When this exchange finishes (say the model answers "It argues KB beats RAG for
+personal agents."), section 3 is folded once and appended to the log — full
+file content compacted, real ids replaced by synthetic ones:
+
+```python
+{"role": "user", "content": "Summarize kb-paper.md for me."},
+{"role": "assistant", "tool_calls": [
+    {"id": "h1", "type": "function",
+     "function": {"name": "read_file", "arguments": "{}"}}]},
+{"role": "tool", "tool_call_id": "h1", "content":
+    "tool call: read_file(path='notes/kb-paper.md')\n"
+    "tool result: # KB vs RAG\n<first 500 chars>… [2300 chars total]"},
+{"role": "assistant", "content": "It argues KB beats RAG for personal agents."},
+```
+
+On the next exchange these four messages appear in section 2, and section 3
+starts fresh with the new user input.
 
 ## Component Catalog
 
@@ -335,12 +391,12 @@ flowchart TD
 | Interfaces | `paw/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
 | Sessions | `paw/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
 | Agent Loop | `paw/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
-| Brain | `paw/brain/` | `Brain.build_messages(...)`, `Brain.decide(...)` | Role-tagged messages, tool schemas | Normalized model decision, usage, errors | Prompt assembly, LiteLLM routing, retry/fallback, model output parsing |
+| Brain | `paw/brain/` | `Brain.decide(...)` | Provider-ready chat messages, tool schemas | Normalized model decision, usage, errors | LiteLLM routing, retry/fallback, model output parsing |
 | Tools | `paw/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
 | Scheduler | `paw/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
 | Config | `paw/config/` | `load_raw_config()`, `load_paw_config()` | `config.json`, env overrides | `PawConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
 | Contracts | `paw/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |
-| Prompts | `paw/prompts/` | Read by `PromptAssembler` | Runtime prompt file | System prompt fragment | Harness-level instructions only |
+| Prompt Assembly | `paw/agent_loop/` (`prompt_assembler.py`, `agent.md`) | `PromptAssembler.build_prompt(...)` | History + current exchange + volatile context | Four-section message list | Prompt structure and harness-level instructions |
 
 External knowledge is not an Paw component. The KB lives wherever you point
 `file_access.scopes.kb.roots` in `config.json` and is exposed to Paw through the `kb` file scope.

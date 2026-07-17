@@ -1,7 +1,8 @@
 """Tests for the scoped file-system tools in ``paw.tools.files``.
 
-Covers scope/permission enforcement, every file operation, the per-operation
-approval policy, and session-memory compaction of large write payloads.
+Covers scope/permission enforcement, every file operation, and the
+per-operation approval policy. (Result compaction is uniform and tested in
+tests/tools/test_registry.py.)
 """
 
 from pathlib import Path
@@ -9,8 +10,6 @@ from pathlib import Path
 import pytest
 
 from paw.config import PawConfig, FileAccessConfig, FileScope
-from paw.contracts.types import ToolCall, ToolResult
-from paw.tools.registry import ToolRegistry
 from paw.tools import files as ft
 
 
@@ -418,22 +417,3 @@ async def test_per_op_permissions_are_independent(tmp_path: Path, monkeypatch):
     # file content reflects only the append (write/edit were blocked)
     content = (root / "x.md").read_text(encoding="utf-8")
     assert content == "original\n appended"
-
-
-# --- session memory compaction -------------------------------------------------
-
-def test_memory_strips_large_write_payload():
-    call = ToolCall(
-        id="tc-1",
-        name="write_file",
-        params={"path": "notes/big.md", "content": "x" * 10000},
-    )
-    result = ToolResult(
-        tool_call_id="tc-1",
-        name="write_file",
-        content="Wrote 10000 bytes to /kb/notes/big.md.",
-    )
-    record = ToolRegistry().compact_result(call, result)
-    assert "content" not in record["params"]
-    assert record["result_ref"] == {"type": "file", "path": "notes/big.md"}
-    assert record["content_chars"] == len(result.content)
