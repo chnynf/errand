@@ -36,8 +36,14 @@ from typing import Any
 
 from paw.config import FileScope, load_paw_config
 
-MAX_READ_BYTES = 1_000_000
+# Reads over this are truncated with a notice: normal KB notes sit far below
+# it, so only anomalies (log dumps, exports) hit the cap instead of flooding
+# the context with one read.
+MAX_READ_BYTES = 50_000
 MAX_WRITE_BYTES = 1_000_000
+# grep must still scan files too large to read whole -- the read truncation
+# notice sends the model here to locate content inside big files.
+MAX_GREP_FILE_BYTES = 1_000_000
 MAX_GREP_MATCHES = 200
 MAX_FIND_RESULTS = 500
 
@@ -235,7 +241,8 @@ def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = 
     Prefer a known path (from an index or prior search) over browsing. For
     several files, issue multiple read_file calls in one round (they run
     concurrently). A not-found error suggests the real path -- read that
-    directly instead of searching.
+    directly instead of searching. Oversized files come back truncated with
+    a notice; use grep_files to locate content inside them.
 
     Args:
         path: Absolute or relative path. Relative resolves against
@@ -262,9 +269,13 @@ def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = 
             hint = f" Did you mean: {suggestion}?" if suggestion else ""
             return f"Error: Not a file: {target}.{hint}"
         size = target.stat().st_size
-        if size > MAX_READ_BYTES:
-            raise ValueError(f"File too large ({size} bytes > {MAX_READ_BYTES}): {target}")
         content = target.read_text(encoding="utf-8", errors="replace")
+        if len(content) > MAX_READ_BYTES:
+            content = (
+                content[:MAX_READ_BYTES]
+                + f"\n[truncated: file is {size} bytes; showing the first "
+                f"{MAX_READ_BYTES}. Use grep_files to locate specific content.]"
+            )
         if cache is not None:
             cache.put(key, content)
         return content
@@ -571,7 +582,7 @@ def grep_files(pattern: str, path: str = "", glob: str = "*") -> str:
             if not fnmatch.fnmatch(file.name, glob):
                 continue
             try:
-                if file.stat().st_size > MAX_READ_BYTES:
+                if file.stat().st_size > MAX_GREP_FILE_BYTES:
                     continue
                 text = file.read_text(encoding="utf-8", errors="replace")
             except OSError:

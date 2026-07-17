@@ -172,6 +172,15 @@ def test_read_file_not_found_suggests_real_path(kb: Path):
     assert "notes/a.md" in result
 
 
+def test_read_file_truncates_oversized_with_notice(kb: Path):
+    (kb / "big.md").write_text("x" * (ft.MAX_READ_BYTES + 500), encoding="utf-8")
+    out = ft.read_file("big.md")
+    assert out.startswith("x" * 100)
+    assert "[truncated: file is" in out
+    assert "grep_files" in out
+    assert len(out) < ft.MAX_READ_BYTES + 200
+
+
 def test_read_file_not_found_no_match_has_no_hint(kb: Path):
     result = ft.read_file("does-not-exist.md")
     assert result.startswith("Error: Not a file:")
