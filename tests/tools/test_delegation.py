@@ -29,7 +29,7 @@ async def test_invoke_agent_rejects_disallowed_delegate(monkeypatch):
         _context={"agent_id": "generalist", "session_id": "s1"},
     )
 
-    assert "is not allowed" in result
+    assert "may not delegate" in result
 
 
 async def test_invoke_agent_blocks_recursive_depth():

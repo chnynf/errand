@@ -25,22 +25,21 @@ def _resolve_tz(tz: str) -> tuple[str, ZoneInfo | None, str]:
     try:
         return tz_name, ZoneInfo(tz_name), ""
     except (ZoneInfoNotFoundError, ValueError, OSError):
-        return tz_name, None, f"Unknown timezone: {tz!r}. Use an IANA name like America/New_York."
+        return tz_name, None, f"Error: unknown timezone {tz!r}. Use an IANA name like America/New_York."
 
 
 def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[dict | None, str]:
     """Validate inputs and return (schedule, error); schedule is None on error."""
     if kind == "at":
         if end_at:
-            return None, "end_at is only supported for recurring schedules ('every' or 'cron')."
+            return None, "Error: end_at is only supported for recurring schedules ('every' or 'cron')."
         value = value.strip()
         try:
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None, (
-                f"Invalid time for 'at': {value!r}. Provide a local date+time like "
-                f"2026-06-10T11:00 (with an optional timezone), or an absolute UTC "
-                f"time like 2026-06-10T15:00:00Z."
+                f"Error: invalid time for 'at': {value!r}. Use a local date+time like "
+                f"2026-06-10T11:00, or an absolute UTC time like 2026-06-10T15:00:00Z."
             )
         # A naive wall-clock time is interpreted in `tz` (default US East) so the
         # model never does timezone math; a value that already carries Z/offset
@@ -56,17 +55,17 @@ def _build_schedule(kind: str, value: str, end_at: str, tz: str = "") -> tuple[d
     if kind == "every":
         interval = parse_every(value)
         if not interval:
-            return None, f"Invalid interval for 'every': {value!r}. Use seconds (3600) or '1h', '30m', '1d'."
+            return None, f"Error: invalid interval for 'every': {value!r}. Use seconds (3600) or '1h', '30m', '1d'."
         return {"kind": "every", "interval_seconds": interval}, ""
     if kind == "cron":
         expr = value.strip()
         if not validate_cron(expr):
-            return None, f"Invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
+            return None, f"Error: invalid cron expression: {expr!r}. Use 5-field format (e.g. '0 7 * * *')."
         tz_name, _, err = _resolve_tz(tz)
         if err:
             return None, err
         return {"kind": "cron", "expr": expr, "tz": tz_name}, ""
-    return None, f"schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
+    return None, f"Error: schedule_kind must be 'at', 'every', or 'cron'. Got: {kind!r}"
 
 
 def _describe(schedule: dict) -> str:
@@ -99,49 +98,44 @@ def schedule_message(
     timezone: str = "",
     _context: dict[str, Any] | None = None,
 ) -> str:
-    """Schedule a future or recurring task/message.
-
-    Create a future or recurring job. Use for user requests to schedule
-    reminders, messages, or actions. The job fires later on its own.
+    """Schedule a future or recurring task/message (reminder, action).
 
     Args:
-        message: What should happen when the job fires (NOT the user's scheduling
+        message: What happens when the job fires (NOT the user's scheduling
             request verbatim). Resolve the payload now:
-            - intent="execute": the action to perform, phrased as an instruction to
-              yourself, e.g. "Summarize today's unread emails and send them to the user."
-              Never store the trigger phrasing like "remind me in 10 minutes" as the task.
-            - intent="say": the exact text to deliver to the user, verbatim.
+            - intent="execute": the action as an instruction to yourself, e.g.
+              "Summarize today's unread emails and send them to the user."
+              Never store trigger phrasing like "remind me in 10 minutes".
+            - intent="say": the exact text to deliver to the user.
         schedule_kind: "at" (one-shot), "every" (recurring), or "cron".
-        schedule_value: For "at", EITHER a local wall-clock time with NO offset
-            (e.g. "2026-06-10T11:00") which is interpreted in `timezone`, OR an
-            absolute UTC time ending in Z (e.g. "2026-06-10T15:00:00Z").
-            For a relative request ("in 3 hours"), compute now (UTC is shown in
-            context) + the offset and pass that as an absolute "...Z" value.
-            "every"=seconds or "1h"/"30m"/"1d"; "cron"=5-field expr.
+        schedule_value: For "at": a local wall-clock time with NO offset
+            (e.g. "2026-06-10T11:00"), interpreted in `timezone`; or an
+            absolute UTC time ending in Z. For a relative request ("in 3
+            hours"), compute now (UTC shown in context) + offset and pass as
+            "...Z". For "every": seconds or "1h"/"30m"/"1d". For "cron":
+            5-field expr.
         name: Optional job name.
-        intent: "execute" (run as instruction) or "say" (deliver text verbatim).
+        intent: "execute" (run as instruction) or "say" (deliver verbatim).
         end_at: ISO 8601 UTC end time for recurring schedules.
-        timezone: IANA zone name, e.g. "America/New_York" (美东) or
-            "America/Los_Angeles" (美西). Defaults to America/New_York if omitted.
-            For "at": a naive wall-clock value is interpreted in this zone; an
-            absolute "...Z" value ignores it. For "cron": the expression fields
-            are evaluated in this zone (e.g. "30 9 * * 5" fires at 09:30 local
-            time, not 09:30 UTC). Do NOT convert timezones yourself.
+        timezone: IANA zone, e.g. "America/New_York" (美东, the default) or
+            "America/Los_Angeles" (美西). Naive "at" values and cron fields
+            are evaluated in this zone; "...Z" values ignore it. Do NOT
+            convert timezones yourself.
 
     Returns: Confirmation with job ID and next run time.
     """
     session_id = str((_context or {}).get("session_id") or "").strip()
     if not session_id:
-        return "Scheduling is unavailable: no active session context."
+        return "Error: scheduling unavailable (no active session context)."
 
     kind = (schedule_kind or "").strip().lower()
     intent = (intent or "execute").strip().lower()
     if intent not in ("execute", "say"):
-        return f"intent must be 'execute' or 'say'. Got: {intent!r}"
+        return f"Error: intent must be 'execute' or 'say'. Got: {intent!r}"
 
     end_at = str(end_at or "").strip()
     if end_at and not validate_at(end_at):
-        return f"Invalid ISO 8601 timestamp for 'end_at': {end_at!r}. Use e.g. 2025-02-24T09:00:00Z."
+        return f"Error: invalid ISO 8601 'end_at': {end_at!r}. Use e.g. 2025-02-24T09:00:00Z."
 
     schedule, error = _build_schedule(kind, str(schedule_value), end_at, str(timezone or ""))
     if error:
@@ -194,10 +188,10 @@ def cancel_scheduled_job(job_id: str) -> str:
     """
     job_id = (job_id or "").strip()
     if not job_id:
-        return "job_id is required."
+        return "Error: job_id is required."
     cancelled = _store.update(job_id, enabled=False)
     if cancelled is None:
-        return f"Job {job_id} not found."
+        return f"Error: job {job_id} not found."
     return (
         f"Cancelled: {cancelled['name']} (id: {cancelled['id']}). "
         f"Was: {_describe(cancelled['schedule'])}. "

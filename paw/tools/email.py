@@ -93,18 +93,18 @@ def send_email(to: str, subject: str, body: str, attachments: str = "") -> str:
                 name.title() for name in sorted(contacts.keys())
             )
             return (
-                f"Contact '{to}' not found. "
+                f"Error: contact '{to}' not found. "
                 f"Available contacts: {available or 'none'}"
             )
 
     files, missing = _resolve_attachments(attachments)
     if missing:
-        return f"Attachment(s) not found: {', '.join(missing)}"
+        return f"Error: attachment(s) not found: {', '.join(missing)}"
 
     try:
         cfg = _get_smtp_config()
     except EnvironmentError as e:
-        return str(e)
+        return f"Error: {e}"
 
     if files:
         msg = EmailMessage()
@@ -130,7 +130,7 @@ def send_email(to: str, subject: str, body: str, attachments: str = "") -> str:
             server.login(cfg["address"], cfg["password"])
             server.send_message(msg)
     except Exception as e:
-        return f"Failed to send email: {e}"
+        return f"Error: failed to send email: {e}"
 
     result = f"Email sent to {recipient_email}. Subject: {subject!r}. Body: {len(body)} chars."
     if files:
@@ -167,7 +167,7 @@ def add_contact(name: str, email: str) -> str:
     Returns: Confirmation or error.
     """
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return f"Invalid email address: {email}"
+        return f"Error: invalid email address: {email}"
 
     contacts = _load_contacts()
     if name.lower() in contacts:
@@ -176,4 +176,4 @@ def add_contact(name: str, email: str) -> str:
     with open(_CONTACTS_FILE, "a", encoding="utf-8") as f:
         f.write(f"- {name}: {email}\n")
 
-    return f"Contact '{name}' ({email}) added successfully."
+    return f"Contact '{name}' ({email}) added."

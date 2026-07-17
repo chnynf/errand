@@ -53,7 +53,7 @@ async def run_cli(
     """
     command = (command or "").strip()
     if not command:
-        return "CLI execution failed: command is required."
+        return "Error: command is required."
 
     blocked = _filesystem_command(command)
     if blocked:
@@ -70,11 +70,7 @@ async def run_cli(
         timeout_seconds=timeout,
     )
     if not approval:
-        return (
-            "CLI command was not approved, so it was not run.\n"
-            f"Command: {command}\n"
-            f"Working directory: {workdir}"
-        )
+        return "CLI command was not approved, so it was not run."
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -84,34 +80,25 @@ async def run_cli(
             stderr=asyncio.subprocess.PIPE,
         )
     except Exception as exc:
-        return f"CLI execution failed to start: {exc}"
+        return f"Error: failed to start: {exc}"
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
-        return (
-            f"CLI command timed out after {timeout}s.\n"
-            f"Command: {command}\n"
-            f"Working directory: {workdir}"
-        )
+        return f"Error: command timed out after {timeout}s."
 
     stdout_text = _decode_and_truncate(stdout, max_chars)
     stderr_text = _decode_and_truncate(stderr, min(max_chars, 20000))
-    return "\n".join(
-        [
-            f"Command: {command}",
-            f"Working directory: {workdir}",
-            f"Exit code: {proc.returncode}",
-            "",
-            "STDOUT:",
-            stdout_text or "(empty)",
-            "",
-            "STDERR:",
-            stderr_text or "(empty)",
-        ]
-    )
+    lines = [
+        f"Exit code: {proc.returncode} (cwd: {workdir})",
+        "STDOUT:",
+        stdout_text or "(empty)",
+    ]
+    if stderr_text:
+        lines += ["STDERR:", stderr_text]
+    return "\n".join(lines)
 
 
 def _filesystem_command(command: str) -> str | None:

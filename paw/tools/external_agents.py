@@ -29,27 +29,24 @@ async def invoke_external_agent(
 
     agent_name = (agent or "").strip()
     if not agent_name:
-        return "External delegation failed: agent is required."
+        return "Error: agent is required."
     if agent_name not in config.external_agents:
-        return f"External delegation failed: agent '{agent_name}' is not configured."
+        return f"Error: external agent '{agent_name}' is not configured."
     if agent_name not in caller.can_delegate:
-        return (
-            f"External delegation failed: agent '{caller.id}' is not allowed "
-            f"to delegate to '{agent_name}'."
-        )
+        return f"Error: agent '{caller.id}' may not delegate to '{agent_name}'."
 
     spec = config.external_agents[agent_name]
     if not spec.command:
-        return f"External delegation failed: agent '{agent_name}' has no command."
+        return f"Error: external agent '{agent_name}' has no command."
     if spec.prompt_mode not in {"stdin", "argument", "stream_json"}:
         return (
-            f"External delegation failed: agent '{agent_name}' has invalid "
+            f"Error: external agent '{agent_name}' has invalid "
             f"prompt_mode {spec.prompt_mode!r}."
         )
 
     task_text = (task or "").strip()
     if not task_text:
-        return "External delegation failed: task is required."
+        return "Error: task is required."
 
     reply_to = runtime_context.get("reply_to")
     if reply_to:
@@ -77,7 +74,7 @@ async def invoke_external_agent(
         )
     except FileNotFoundError:
         return (
-            f"External delegation failed: command not found for '{agent_name}': "
+            f"Error: command not found for external agent '{agent_name}': "
             f"{spec.command[0]}"
         )
 
@@ -92,23 +89,20 @@ async def invoke_external_agent(
         proc.kill()
         await proc.communicate()
         return (
-            f"External delegation to '{agent_name}' timed out after "
-            f"{spec.timeout_seconds} seconds."
+            f"Error: external agent '{agent_name}' timed out after "
+            f"{spec.timeout_seconds}s."
         )
 
     stdout_text = _decode_and_truncate(stdout, spec.max_output_chars)
     stderr_text = _decode_and_truncate(stderr, min(spec.max_output_chars, 4000))
 
     parts = [
-        f"External agent: {agent_name}",
-        f"Command: {' '.join(command if spec.prompt_mode != 'argument' else spec.command)}",
-        f"Exit code: {proc.returncode}",
-        "",
+        f"{agent_name} exit code: {proc.returncode}",
         "STDOUT:",
         stdout_text or "(empty)",
     ]
     if stderr_text:
-        parts.extend(["", "STDERR:", stderr_text])
+        parts.extend(["STDERR:", stderr_text])
     return "\n".join(parts)
 
 
@@ -128,7 +122,7 @@ async def _run_stream_json_agent(
         )
     except FileNotFoundError:
         return (
-            f"External delegation failed: command not found for '{agent_name}': "
+            f"Error: command not found for external agent '{agent_name}': "
             f"{spec.command[0]}"
         )
 
@@ -155,8 +149,8 @@ async def _run_stream_json_agent(
                 proc.kill()
                 await proc.communicate()
                 return (
-                    f"External delegation to '{agent_name}' timed out after "
-                    f"{spec.timeout_seconds} seconds."
+                    f"Error: external agent '{agent_name}' timed out after "
+                    f"{spec.timeout_seconds}s."
                 )
             raw_line = await asyncio.wait_for(
                 proc.stdout.readline(),
@@ -191,8 +185,8 @@ async def _run_stream_json_agent(
         proc.kill()
         await proc.communicate()
         return (
-            f"External delegation to '{agent_name}' timed out after "
-            f"{spec.timeout_seconds} seconds."
+            f"Error: external agent '{agent_name}' timed out after "
+            f"{spec.timeout_seconds}s."
         )
 
     if proc.stdin and not proc.stdin.is_closing():
@@ -204,16 +198,12 @@ async def _run_stream_json_agent(
     body = "\n".join(part for part in output_parts if part).strip()
     body = _truncate_text(body, spec.max_output_chars)
     parts = [
-        f"External agent: {agent_name}",
-        f"Command: {' '.join(spec.command)}",
-        f"Exit code: {proc.returncode}",
-        f"Stream events: {events_seen}",
-        "",
+        f"{agent_name} exit code: {proc.returncode}",
         "OUTPUT:",
         body or "(empty)",
     ]
     if stderr_text:
-        parts.extend(["", "STDERR:", stderr_text])
+        parts.extend(["STDERR:", stderr_text])
     return "\n".join(parts)
 
 

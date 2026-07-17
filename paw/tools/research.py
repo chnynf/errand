@@ -17,21 +17,16 @@ def research(query: str, max_results: int = 8) -> str:
     try:
         results = DDGS().text(query, max_results=max_results)
     except Exception as e:
-        return f"Search failed: {e}"
+        return f"Error: search failed: {e}"
 
     if not results:
         return f"No results found for: {query}"
 
-    lines = [f"Research results for: {query}\n"]
+    lines = []
     for i, r in enumerate(results, 1):
         title = r.get("title", "Untitled")
         body = r.get("body", "No description available.")
         url = r.get("href", "")
-        lines.append(f"[{i}] {title}\n    {body}\n    Source: {url}\n")
+        lines.append(f"[{i}] {title}\n    {body}\n    {url}")
 
-    lines.append(
-        "---\n"
-        f"Found {len(results)} results. "
-        "Use the sources above to form a comprehensive answer."
-    )
     return "\n".join(lines)

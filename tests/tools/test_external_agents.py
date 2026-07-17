@@ -57,8 +57,7 @@ async def test_invoke_external_agent_argument_mode(monkeypatch):
         _context={"agent_id": "generalist"},
     )
 
-    assert "External agent: echoer" in result
-    assert "Exit code: 0" in result
+    assert "echoer exit code: 0" in result
     assert "say hello" in result
 
 
@@ -156,4 +155,4 @@ async def test_invoke_external_agent_rejects_disallowed_delegate(monkeypatch):
         _context={"agent_id": "applied-scientist"},
     )
 
-    assert "is not allowed" in result
+    assert "may not delegate" in result

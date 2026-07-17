@@ -245,24 +245,21 @@ async def _authorize(
 
 
 def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = None) -> str:
-    """Read a known file path. Reads agent knowledge, profiles, SOPs, notes.
+    """Read a file: agent knowledge, profiles, SOPs, notes.
 
-    Prefer this once you know where something lives (from an index or a prior
-    search) instead of browsing for it. Reads one file; when you need several,
-    issue multiple read_file calls in a single round (the runtime runs them
-    concurrently). If a read comes back not-found, the error suggests the real
-    path -- read that directly instead of issuing a separate search.
+    Prefer a known path (from an index or prior search) over browsing. For
+    several files, issue multiple read_file calls in one round (they run
+    concurrently). A not-found error suggests the real path -- read that
+    directly instead of searching.
 
     Args:
-        path: The file path to read -- absolute, or relative. A relative path
-            resolves against ``base_path`` when given, otherwise against the
-            knowledge-base root.
-        base_path: What a relative ``path`` is relative to. Index files list
-            their entries relative to the index's own location, so when ``path``
-            comes from an index, pass that index's path here. Omit it only for a
-            path that is already relative to the knowledge-base root.
+        path: Absolute or relative path. Relative resolves against
+            ``base_path`` when given, else the knowledge-base root.
+        base_path: Base for a relative ``path``. When ``path`` comes from an
+            index file, pass that index's path (index entries are relative to
+            the index's location).
 
-    Returns: File contents as text, or an ``Error: ...`` message.
+    Returns: File contents, or ``Error: ...``.
     """
     try:
         target, _, file_scope = _locate(path, base_path=base_path or None)
@@ -293,18 +290,17 @@ def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = 
 def list_dir(path: str = "", base_path: str = "", depth: int = 1) -> str:
     """List directory entries; one level, or a deeper tree.
 
-    Use to orient yourself. To see a whole subtree, call once with a larger
-    ``depth`` rather than many single-level lists. To locate files by name use
-    ``find_files``; to find content use ``grep_files``. Directories are suffixed
-    with ``/``; dotfiles are hidden.
+    Use to orient yourself. For a whole subtree, call once with a larger
+    ``depth`` rather than many single-level lists. Locate files by name with
+    ``find_files``, by content with ``grep_files``. Directories end with
+    ``/``; dotfiles are hidden.
 
     Args:
         path: Directory path. Empty lists the knowledge-base root.
-        base_path: Optional base file/dir for resolving a relative ``path``.
-        depth: Levels to descend. 1 (default) lists only the immediate entries;
-            higher values return an indented tree of nested entries.
+        base_path: Optional base for resolving a relative ``path``.
+        depth: Levels to descend (default 1; higher returns an indented tree).
 
-    Returns: Entries (indented tree when depth > 1), or an ``Error: ...`` message.
+    Returns: Entries, or ``Error: ...``.
     """
     try:
         target, _, file_scope = _locate(path or ".", base_path=base_path or None)
@@ -351,18 +347,16 @@ async def write_file(
 ) -> str:
     """Create or overwrite a text file.
 
-    Parent directories are created as needed. Prefer ``edit_file`` for partial
-    changes and ``append_file`` to add at the end; use this for new files or
-    full replacement only.
-    Call at most once per file per turn; put all content in a single write.
-    The status echoes the exact text now on disk, so you never need to re-read
-    to confirm the write or to retrieve what you just wrote.
+    Parent directories are created. Prefer ``edit_file`` for partial changes
+    and ``append_file`` to add at the end; use this for new files or full
+    replacement only. One call per file per turn, with all content. The
+    result echoes what is now on disk -- never re-read to confirm a write.
 
     Args:
-        path: File path. Relative paths resolve against the knowledge-base root.
+        path: File path; relative resolves against the knowledge-base root.
         content: Full UTF-8 text to write.
 
-    Returns: A status line, or an ``Error: ...`` / not-approved message.
+    Returns: Status echoing the written text, or ``Error: ...`` / not-approved.
     """
     try:
         target, name, file_scope = _locate(path)
@@ -384,8 +378,8 @@ async def write_file(
         target.write_text(content, encoding="utf-8")
         _invalidate(_context, target)
         return (
-            f"Wrote {len(data)} bytes to {target}. This is the exact content now "
-            f"on disk -- no need to re-read to confirm:\n{_written_summary(content)}"
+            f"Wrote {len(data)} bytes to {target}. Now on disk "
+            f"(no re-read needed):\n{_written_summary(content)}"
         )
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
@@ -398,17 +392,16 @@ async def append_file(
 ) -> str:
     """Append text to a file; creates the file if missing. Never overwrites.
 
-    Use for new notes, memories, or log entries. Prefer ``edit_file`` for in-place
-    changes and ``write_file`` to replace a file wholesale.
-    Call at most once per file per turn; combine what you add into one append.
-    The status echoes the exact text just appended, so you never need to re-read
-    to confirm the append or to retrieve what you just wrote.
+    Use for new notes, memories, or log entries. Prefer ``edit_file`` for
+    in-place changes and ``write_file`` for full replacement. One call per
+    file per turn, combining what you add. The result echoes what was
+    appended -- never re-read to confirm.
 
     Args:
-        path: File path. Relative paths resolve against the knowledge-base root.
+        path: File path; relative resolves against the knowledge-base root.
         content: UTF-8 text to append.
 
-    Returns: A status line, or an ``Error: ...`` / not-approved message.
+    Returns: Status echoing the appended text, or ``Error: ...`` / not-approved.
     """
     try:
         target, name, file_scope = _locate(path)
@@ -430,8 +423,8 @@ async def append_file(
             fh.write("\n" + content)
         _invalidate(_context, target)
         return (
-            f"Appended {len(data)} bytes to {target}. This is the exact text just "
-            f"appended -- no need to re-read to confirm:\n{_written_summary(content)}"
+            f"Appended {len(data)} bytes to {target}. Appended text "
+            f"(no re-read needed):\n{_written_summary(content)}"
         )
     except _FS_ERRORS as exc:
         return f"Error: {exc}"
@@ -446,20 +439,18 @@ async def edit_file(
 ) -> str:
     """Replace text in an existing file.
 
-    ``old_string`` must match exactly once unless ``replace_all`` is true;
-    include enough surrounding context to make the match unique.
-    Prefer this over ``write_file`` for partial changes.
-    Call at most once per file per turn; combine multiple edits into one call.
-    The status echoes the replacement text now on disk, so you never need to
-    re-read to confirm the edit or to retrieve what you just wrote.
+    ``old_string`` must match exactly once unless ``replace_all``; include
+    enough surrounding context to be unique. Prefer this over ``write_file``
+    for partial changes. Combine edits into one call per file per turn. The
+    result echoes the replacement -- never re-read to confirm.
 
     Args:
-        path: File path. Relative paths resolve against the knowledge-base root.
+        path: File path; relative resolves against the knowledge-base root.
         old_string: Exact text to find.
-        new_string: Replacement text. Omit or pass "" to delete the matched text.
+        new_string: Replacement text; omit or "" to delete the match.
         replace_all: Replace every occurrence instead of requiring uniqueness.
 
-    Returns: A status line, or an ``Error: ...`` / not-approved message.
+    Returns: Status echoing the replacement, or ``Error: ...`` / not-approved.
     """
     try:
         if not old_string:
@@ -500,7 +491,7 @@ async def edit_file(
         outcome = (
             f"deleted the matched text ({old_snippet[:60]!r})"
             if not new_string
-            else f"the replacement now on disk -- no need to re-read to confirm:\n{_written_summary(new_string)}"
+            else f"replacement now on disk (no re-read needed):\n{_written_summary(new_string)}"
         )
         return f"Replaced {replacements} occurrence{suffix} in {target}; {outcome}"
     except _FS_ERRORS as exc:
@@ -516,10 +507,10 @@ async def delete_file(
     Non-empty directories and the knowledge-base roots themselves are refused.
 
     Args:
-        path: File or empty-directory path. Relative paths resolve against the
+        path: File or empty-directory path; relative resolves against the
             knowledge-base root.
 
-    Returns: A status line, or an ``Error: ...`` / not-approved message.
+    Returns: Status, or ``Error: ...`` / not-approved.
     """
     try:
         target, name, file_scope = _locate(path)
@@ -550,15 +541,14 @@ def grep_files(pattern: str, path: str = "", glob: str = "*") -> str:
     """Search file contents by regex (recursive).
 
     Use to find where something is recorded (a past memory, a decision). One
-    well-chosen pattern usually locates it in a single call -- prefer that over
-    browsing directories with repeated list_dir calls.
+    well-chosen pattern beats browsing with repeated list_dir calls.
 
     Args:
-        pattern: Python regular expression to search for.
-        path: Subdirectory to search under. Empty searches the knowledge-base root.
-        glob: Filename glob to restrict which files are scanned (e.g. ``*.md``).
+        pattern: Python regular expression.
+        path: Subdirectory to search. Empty searches the knowledge-base root.
+        glob: Filename glob restricting which files are scanned (e.g. ``*.md``).
 
-    Returns: Matching ``relpath:line:text`` lines, or an ``Error: ...`` message.
+    Returns: ``relpath:line:text`` matches, or ``Error: ...``.
     """
     try:
         try:
@@ -609,14 +599,14 @@ def grep_files(pattern: str, path: str = "", glob: str = "*") -> str:
 def find_files(glob_pattern: str, path: str = "") -> str:
     """Find files and directories by name glob (recursive).
 
-    Use to locate files by name, or to see a subtree's layout, in one call
-    instead of repeated single-level list_dir calls.
+    Locates files by name, or shows a subtree's layout, in one call instead
+    of repeated single-level list_dir calls.
 
     Args:
-        glob_pattern: Glob to match against paths, e.g. ``*.md`` or ``**/*.py``.
-        path: Subdirectory to search under. Empty searches the knowledge-base root.
+        glob_pattern: Glob matched against paths, e.g. ``*.md`` or ``**/*.py``.
+        path: Subdirectory to search. Empty searches the knowledge-base root.
 
-    Returns: Newline-separated relative paths, or an ``Error: ...`` message.
+    Returns: Relative paths (one per line), or ``Error: ...``.
     """
     try:
         base, _, file_scope = _locate(path or ".")

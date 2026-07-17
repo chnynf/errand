@@ -30,24 +30,21 @@ async def invoke_agent(
     depth = int(runtime_context.get("delegation_depth") or 0)
 
     if depth >= MAX_DELEGATION_DEPTH:
-        return "Delegation blocked: maximum delegation depth reached."
+        return "Error: maximum delegation depth reached."
 
     config = load_paw_config()
     caller = config.get_agent(caller_agent_id)
     target_id = (agent_id or "").strip()
     if not target_id:
-        return "Delegation failed: agent_id is required."
+        return "Error: agent_id is required."
     if target_id not in config.agents:
-        return f"Delegation failed: agent '{target_id}' is not configured."
+        return f"Error: agent '{target_id}' is not configured."
     if target_id not in caller.can_delegate:
-        return (
-            f"Delegation failed: agent '{caller.id}' is not allowed to delegate "
-            f"to '{target_id}'."
-        )
+        return f"Error: agent '{caller.id}' may not delegate to '{target_id}'."
 
     task_text = (task or "").strip()
     if not task_text:
-        return "Delegation failed: task is required."
+        return "Error: task is required."
 
     reply_to = runtime_context.get("reply_to")
     if reply_to:
@@ -91,17 +88,13 @@ async def invoke_agent(
         )
     except asyncio.TimeoutError:
         return (
-            f"Delegation to '{target_id}' timed out after "
-            f"{DEFAULT_TIMEOUT_SECONDS} seconds."
+            f"Error: delegation to '{target_id}' timed out after "
+            f"{DEFAULT_TIMEOUT_SECONDS}s."
         )
     finally:
         await loop.shutdown()
 
-    return (
-        f"Delegated agent: {target_id}\n"
-        f"Child session: {child_session_id}\n\n"
-        f"{result}"
-    )
+    return f"Result from {target_id}:\n{result}"
 
 
 def _build_child_input(task: str, context: str) -> str:

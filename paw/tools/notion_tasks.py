@@ -95,12 +95,12 @@ def get_notion_tasks(status_filter: str = "To Do,Doing") -> str:
     try:
         headers = _get_headers()
     except EnvironmentError as e:
-        return str(e)
+        return f"Error: {e}"
 
     try:
         database_id = _find_database_id(headers, "Task List")
     except RuntimeError as e:
-        return str(e)
+        return f"Error: {e}"
 
     statuses = [s.strip() for s in status_filter.split(",")]
 

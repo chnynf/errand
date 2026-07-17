@@ -218,7 +218,7 @@ def test_tool_summary_carries_cross_tool_nudges():
     # the three decisioning nudges
     assert "Think before calling" in summary
     assert "Route, don't search" in summary
-    assert "Batch independent work" in summary
+    assert "Merge or batch work" in summary
 
 
 # validate_args is the single validation gate; the agent loop invokes it before
