@@ -47,6 +47,11 @@ MAX_GREP_FILE_BYTES = 1_000_000
 MAX_GREP_MATCHES = 200
 MAX_FIND_RESULTS = 500
 
+# Model-facing marker for a KB-root-absolute path. A path written `[kb-root]/x`
+# resolves to ``<kb root>/x`` regardless of any base_path -- it is how index
+# links and prompt resources address files, so the model passes them verbatim.
+KB_ROOT_MARKER = "[kb-root]/"
+
 _FS_ERRORS = (OSError, ValueError)
 
 
@@ -71,11 +76,11 @@ def _scope_roots() -> list[tuple[str, FileScope, Path]]:
 
 
 def _base_root() -> Path:
-    """Root that bare relative paths resolve against (the default scope's root).
+    """The KB root: what ``[kb-root]/...`` paths resolve against (default scope's root).
 
     This is the broad outer zone; everything the model can touch lives under it,
-    so the model only ever needs paths relative to this single root and never
-    names a scope.
+    so the model addresses every file as ``[kb-root]/<path>`` and never names a
+    scope. Bare relative paths (no marker, no base_path) also fall back here.
     """
     config = load_paw_config().file_access
     default = config.scopes.get(config.default_scope)
@@ -86,6 +91,10 @@ def _base_root() -> Path:
 
 def _resolve(path: str, *, base_path: str | None = None) -> Path:
     base_root = _base_root()
+    # A `[kb-root]/...` path is absolute against the KB root; the marker takes
+    # precedence over base_path so an index link always resolves the same way.
+    if path.startswith(KB_ROOT_MARKER):
+        return (base_root / path[len(KB_ROOT_MARKER):]).resolve()
     raw = Path(os.path.expanduser(path))
     if raw.is_absolute():
         return raw.resolve()
@@ -171,10 +180,10 @@ def _suggest_paths(name: str, limit: int = 5) -> str:
     """Find files under the base root whose basename matches ``name``.
 
     Turns a not-found ``read_file`` into a self-correcting error: the model
-    often guesses the wrong relative prefix (e.g. ``sops/x.md`` when the file is
-    at ``generalist/sops/x.md``), so we point it straight at the real path
-    instead of forcing a separate ``find_files`` round-trip. Returns a
-    comma-separated list of base-root-relative paths, or "".
+    often guesses the wrong prefix (e.g. ``sops/x.md`` when the file is at
+    ``generalist/sops/x.md``), so we point it straight at the real path instead
+    of forcing a separate ``find_files`` round-trip. Returns a comma-separated
+    list of verbatim-usable ``[kb-root]/...`` paths, or "".
     """
     if not name:
         return ""
@@ -185,7 +194,8 @@ def _suggest_paths(name: str, limit: int = 5) -> str:
     for entry in root.rglob(name):
         rel = entry.relative_to(root)
         if entry.is_file() and not any(part.startswith(".") for part in rel.parts):
-            found.append(str(rel).replace("\\", "/"))
+            rel_posix = str(rel).replace("\\", "/")
+            found.append(f"{KB_ROOT_MARKER}{rel_posix}")
             if len(found) >= limit:
                 break
     return ", ".join(found)
@@ -245,11 +255,11 @@ def read_file(path: str, base_path: str = "", _context: dict[str, Any] | None = 
     a notice; use grep_files to locate content inside them.
 
     Args:
-        path: Absolute or relative path. Relative resolves against
-            ``base_path`` when given, else the knowledge-base root.
-        base_path: Base for a relative ``path``. When ``path`` comes from an
-            index file, pass that index's path (index entries are relative to
-            the index's location).
+        path: A ``[kb-root]/...`` path (as listed in an index -- pass it
+            verbatim) or an absolute path.
+        base_path: Optional. Only for a deliberately relative ``path``: the
+            path then resolves against ``base_path``. Not needed for
+            ``[kb-root]/...`` or absolute paths.
 
     Returns: File contents, or ``Error: ...``.
     """
@@ -292,8 +302,9 @@ def list_dir(path: str = "", base_path: str = "", depth: int = 1) -> str:
     ``/``; dotfiles are hidden.
 
     Args:
-        path: Directory path. Empty lists the knowledge-base root.
-        base_path: Optional base for resolving a relative ``path``.
+        path: A ``[kb-root]/...`` or absolute directory path. Empty lists the
+            KB root.
+        base_path: Optional base for a deliberately relative ``path``.
         depth: Levels to descend (default 1; higher returns an indented tree).
 
     Returns: Entries, or ``Error: ...``.
@@ -349,7 +360,7 @@ async def write_file(
     land exactly as submitted -- never re-read to confirm a write.
 
     Args:
-        path: File path; relative resolves against the knowledge-base root.
+        path: A ``[kb-root]/...`` path (from an index) or an absolute path.
         content: Full UTF-8 text to write.
 
     Returns: Status, or ``Error: ...`` / not-approved.
@@ -391,7 +402,7 @@ async def append_file(
     submitted -- never re-read to confirm.
 
     Args:
-        path: File path; relative resolves against the knowledge-base root.
+        path: A ``[kb-root]/...`` path (from an index) or an absolute path.
         content: UTF-8 text to append.
 
     Returns: Status, or ``Error: ...`` / not-approved.
@@ -437,7 +448,7 @@ async def edit_file(
     submitted -- never re-read to confirm.
 
     Args:
-        path: File path; relative resolves against the knowledge-base root.
+        path: A ``[kb-root]/...`` path (from an index) or an absolute path.
         old_string: Exact text to find.
         new_string: Replacement text; omit or "" to delete the match.
         replace_all: Replace every occurrence instead of requiring uniqueness.
@@ -517,8 +528,8 @@ async def delete_file(
     Non-empty directories and the knowledge-base roots themselves are refused.
 
     Args:
-        path: File or empty-directory path; relative resolves against the
-            knowledge-base root.
+        path: A ``[kb-root]/...`` path (from an index) or an absolute path to a
+            file or empty directory.
 
     Returns: Status, or ``Error: ...`` / not-approved.
     """
@@ -555,7 +566,7 @@ def grep_files(pattern: str, path: str = "", glob: str = "*") -> str:
 
     Args:
         pattern: Python regular expression.
-        path: Subdirectory to search. Empty searches the knowledge-base root.
+        path: A ``[kb-root]/...`` or absolute subdirectory. Empty searches the KB root.
         glob: Filename glob restricting which files are scanned (e.g. ``*.md``).
 
     Returns: ``relpath:line:text`` matches, or ``Error: ...``.
@@ -614,7 +625,7 @@ def find_files(glob_pattern: str, path: str = "") -> str:
 
     Args:
         glob_pattern: Glob matched against paths, e.g. ``*.md`` or ``**/*.py``.
-        path: Subdirectory to search. Empty searches the knowledge-base root.
+        path: A ``[kb-root]/...`` or absolute subdirectory. Empty searches the KB root.
 
     Returns: Relative paths (one per line), or ``Error: ...``.
     """

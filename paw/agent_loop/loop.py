@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import List, Optional
 
 from paw.agent_loop.prompt_assembler import PromptAssembler
@@ -150,6 +151,22 @@ class AgentLoop:
         # append-only prefix that stays prefix-cacheable across rounds, while the
         # volatile context (time, rolling summary, instruction) is re-appended
         # last so it never breaks that prefix.
+        # Roll old exchanges into the distant (Q&A-compacted) section before
+        # building history: a >=2h silence gap ends the previous conversation
+        # (everything rolls), and token-budget overflow migrates the oldest
+        # group (see Memory.roll_distant). A gap roll adds a session note to
+        # the volatile context so the model treats this as a fresh
+        # conversation; the note stays constant for the whole exchange.
+        now = time.time()
+        gap_seconds = now - (self.memory.last_activity_at() or now)
+        session_note: Optional[str] = None
+        if self.memory.roll_distant(now):
+            gap_hours = gap_seconds / 3600
+            session_note = (
+                f"New conversation: previous activity was ~{gap_hours:.1f}h ago. "
+                "Earlier chats appear above in condensed form; treat this "
+                "message as the start of a fresh conversation."
+            )
         history_messages = self.memory.build_history_messages()
         current_exchange: list[dict] = [self._user_message(user_input)]
         context_summary = self.memory.data.get("context_summary")
@@ -174,6 +191,7 @@ class AgentLoop:
                 current_exchange,
                 context_summary=context_summary,
                 instruction=instruction,
+                session_note=session_note,
             )
             brain_output = await self.brain.decide(
                 messages,

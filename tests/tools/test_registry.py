@@ -217,8 +217,8 @@ def test_tool_summary_carries_cross_tool_nudges():
     assert "TOOL USE:" in summary
     # the three decisioning nudges
     assert "Think before calling" in summary
-    assert "Route, don't search" in summary
-    assert "Merge or batch work" in summary
+    assert "pass the index's `[kb-root]/...` path verbatim" in summary
+    assert "Batch work whenever possible" in summary
 
 
 # validate_args is the single validation gate; the agent loop invokes it before

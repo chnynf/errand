@@ -99,6 +99,36 @@ catalog and reached via `call_tool`. Configured in `registry.py:_DEFAULT_NATIVE`
   expressed as "hide the tool"; in practice nothing is `false` and a blocked op
   just returns an error.)
 
+## KB path convention (`[kb-root]/`)
+
+Every path the model sees is **absolute from the KB root**, written with a
+literal `[kb-root]/` prefix (e.g. `[kb-root]/agents/applied-scientist/INDEX.md`).
+The model copies the string **verbatim** into any file tool — no `base_path`, no
+per-file base, no relative resolution to reason about.
+
+- **Why absolute-from-root, not file-relative.** File-relative links force the
+  "how to resolve" (pass the containing file's path as `base_path`) into the tool
+  schema while the "what" (the path) sits in the system prompt — the model has to
+  bridge them. One root-anchored spelling collapses that: same string everywhere,
+  multi-level index→sub-index→leaf navigation needs no special rule, and the same
+  file always has one canonical path (trivial orphan/link validation).
+- **The marker is a real token, stripped in `_resolve`** (`paw/tools/files.py`,
+  `KB_ROOT_MARKER`). It resolves against `_base_root()` (the default scope root)
+  and takes precedence over `base_path`, then flows through `_locate` so scope
+  permissions still apply.
+- **`base_path` is retained but unadvertised.** Resolution rule: `[kb-root]/…` →
+  KB-root-absolute; OS-absolute → as-is; `base_path` given → path is relative to
+  it; bare relative + no base → lenient KB-root fallback. KB navigation never
+  needs `base_path`; it stays only as an escape hatch.
+- **Preloaded resources are self-labelling.** `prompt_assembler.py` heads each
+  resource with its own `[kb-root]/…` path and one line ("pass the `[kb-root]/…`
+  path verbatim"); it no longer emits the old `Logical path` / `Base path` /
+  "leaf files" wording.
+- **Authoring convention lives in the kb**: `~/Documents/kb/SOUL.md` (the rule)
+  and `kb-maintenance.md` (templates write `[kb-root]/…` paths). Keep the marker
+  string identical on both sides (`files.KB_ROOT_MARKER` /
+  `prompt_assembler.KB_ROOT_MARKER`) if it ever changes.
+
 ## Open follow-ups
 
 - **`run_cli` undercuts the file sandbox.** It is effectively unrestricted shell,

@@ -34,7 +34,7 @@ class _FakeRegistry:
 
 
 class _FakePromptAssembler:
-    def build_prompt(self, history_messages, current_exchange, *, context_summary=None, instruction=None):
+    def build_prompt(self, history_messages, current_exchange, *, context_summary=None, instruction=None, session_note=None):
         return [
             {"role": "system", "content": "sys"},
             *history_messages,

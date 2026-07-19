@@ -19,8 +19,9 @@ Anthropic model is in the strategy. Design for implicit prefix caching first.
 ## The mental model: one turn, its rounds, and the message tokens
 
 A **turn** = one `process_input` call = one human/scheduled message plus every
-assistant/tool round it triggers. Notation used throughout this doc and in
-`loop.py` comments:
+assistant/tool round it triggers. (The code calls this an **exchange** —
+`current_exchange`, `add_exchange`, `_fold_exchange`; same thing.) Notation
+used throughout this doc and in `loop.py` comments:
 
 - **mₖ** — a message from the human/scheduler side (turn k's input).
 - **Aₖ** — an assistant message (may carry a tool call *or* be the final text).
@@ -80,17 +81,17 @@ N−1 appended, plus turn N's new content, is re-billed.
 
 ### The fix
 
-`prompt_assembler.build_prefix_messages(history)` returns just
-`[system, *history]`. The loop keeps that as an append-only `prefix`, appends
-each `Aₖ, Tₖ` to it, and re-appends a fresh CTX as the last message on **every**
-call. Now the cached sequences are `[sys, m1]`, `[sys, m1, A1, T1]`,
-`[sys, m1, A1, T1, A2, T2]`, … with CTX always trailing. Turn 2 reuses all of
-`[sys … A3]`; only the small trailing CTX is ever re-billed.
+`prompt_assembler.build_prompt` assembles every call as four explicit sections,
+in order: `system → history → current_exchange → CTX`. The loop appends each
+round's `Aₖ, Tₖ` to `current_exchange`, and `build_prompt` re-appends a fresh
+CTX as the last message on **every** call. Now the cached sequences are
+`[sys, m1]`, `[sys, m1, A1, T1]`, `[sys, m1, A1, T1, A2, T2]`, … with CTX
+always trailing. Turn 2 reuses all of `[sys … A3]`; only the small trailing CTX
+is ever re-billed.
 
 Trade-off accepted: CTX (a few hundred tokens) is re-billed once per round
 instead of being cached within a turn. That is far cheaper than re-billing the
-entire history across turns. `build_messages` is retained (it still composes
-`prefix + CTX`) so callers/tests that want the full list keep working.
+entire history across turns.
 
 ### Honest limit observed
 
@@ -109,49 +110,80 @@ not propagation latency (gaps of 30s+ between rounds still didn't help). So:
 
 ## History persistence ≠ what the model is fed
 
-`memory.data["history"]` is **both** the on-disk audit record and the source
-`build_history_messages` replays to the model — there is no separate log. But
-two compactions already keep replay cheap, which shapes what is and isn't worth
-pruning:
+`memory.data` is **both** the on-disk audit record and the source
+`build_history_messages` replays to the model — there is no separate log, and
+the log stores provider-ready chat messages, so replay is a plain slice with no
+translation layer. The turn lives at full fidelity only while it runs; it is
+**folded once at step-out** (`AgentLoop._fold_exchange` → `Memory.add_exchange`):
 
-1. **Tool results are stored compacted, not raw.** `ToolRegistry.compact_result`
-   → `Memory._render_tool_record` persists a one-line preview / `result_ref`
-   pointer + `content_chars`, **never the full output**. The full bytes exist
-   only in-memory during the live turn (where the model needs them to act).
-   - Example: a `read_file` of a 351-char file persists as
-     `read_file: result stored as file ref <path> (351 chars)` (~15 tokens), not
-     the 351 chars. On replay the model sees the pointer and re-reads on demand
-     (now I/O-cached) if it actually needs the content.
-2. **Reasoning content is not replayed across turns.** `_ai_message` rebuilds
-   assistant messages from `tool_calls` / `text_response` only — it never
-   re-emits `reasoning_content`. (It *is* still written to disk; that bloats the
-   session file but costs no model tokens.)
+1. **Tool rounds fold to skeleton anchors + compacted results.** Per round, one
+   assistant anchor (real tool names, synthetic ids, empty args — just enough
+   to keep every tool message legally paired) followed by one compacted tool
+   message per result (`ToolRegistry.compact_interaction`: the call with capped
+   arg values + a capped result preview and total size). The full bytes exist
+   only in the live `current_exchange` during the turn, **never on disk**.
+   - Example: a `read_file` of a 2300-char file persists as
+     `tool call: read_file(path='…')\ntool result: <first 500 chars>… [2300
+     chars total]`, not the 2300 chars. On replay the model re-reads on demand
+     if it actually needs the content — files themselves are the durable memory.
+2. **Reasoning content is not persisted or replayed across turns.**
+   `_fold_exchange` keeps only tool anchors and the final text. (Within a turn,
+   see the `replay_reasoning` flag below.)
 
-**Consequence — decided, do not "optimize" away:** because completed-turn tool
-rounds are already ~15-token pointers on replay, **dropping them entirely buys
-~200 tokens/turn and reintroduces correctness risk** (lost detail a later turn
-might need; reliance on the user-facing final text being self-sufficient). So we
-**keep them**. The lever that *does* matter is caching (above), not pruning.
+**Consequence — decided, do not "optimize" away:** because folded tool rounds
+are already compact on replay, **dropping them entirely buys little and
+reintroduces correctness risk** (lost detail a later turn might need; reliance
+on the user-facing final text being self-sufficient). So recent history keeps
+them. The lever that *does* matter is caching (above) — and, for *old*
+exchanges, the distant roll below.
 
 Rejected alternative: an extra model call to summarize already-compacted rounds
-into one synthetic "tool context." It adds a call to compress ~15-token entries
-and is redundant with the existing oversized-turn compaction. Net-negative.
+into one synthetic "tool context." It adds a call to compress already-small
+entries; the distant section (below) gets the same effect for free by keeping
+only what the fold already stores verbatim. Net-negative.
 
-### History window
+### History window: two resolutions, distant + recent
 
-`build_history_messages(recent_n=20, chunk=8)` windows to the last ~20–27
-entries, with the start **quantized to `chunk`** so it holds steady for several
-turns instead of sliding one entry per turn (a per-turn slide would shift the
-whole prefix and defeat prefix caching). The on-disk file still keeps everything.
+**Recent** replay is a token-budgeted slice of the log
+(`_HISTORY_TOKEN_BUDGET`, 10K): newest whole exchanges, cut only on exchange
+boundaries so anchor/tool pairs stay intact. When over budget, the oldest
+exchanges leave in **groups of 3** (`_HISTORY_DROP_EXCHANGES`), always keeping
+at least one — the group drop keeps the window start steady for several turns
+instead of sliding every turn (a per-turn slide would shift the whole prefix
+and defeat prefix caching).
 
-### Oversized-turn compaction
+**Distant** is where those exchanges go instead of vanishing: compacted to just
+the user text + final assistant text (tool anchors and results drop together,
+keeping every pair a legal message sequence), replayed *before* recent history.
+`Memory.roll_distant`, called at exchange start, migrates on whichever trigger
+fires first:
 
-When one turn's live context passes `COMPACTION_TRIGGER_TOKENS` (20k), the loop
-does a single forced-text model call to condense the turn into a self-sufficient
-summary, then continues as a fresh internal segment (still one reply to the
-user). The summary is written to be usable **alone** — the post-compaction
-instruction tells the model to continue from it and only re-read if it genuinely
-missed something (avoiding a re-read loop).
+- **Silence gap ≥ 2h** (`_DISTANT_GAP_SECONDS`) — the previous conversation is
+  over: *everything* rolls to distant, and the loop puts a `SESSION NOTE` in
+  CTX telling the model to treat the message as a fresh conversation. This is
+  the forever-session fix (WeChat): yesterday's thread stops replaying as if
+  mid-flight, without losing what was said.
+- **Token budget overflow** — the group-drop above, routed into distant.
+
+Distant is capped at 2K chars of content (`_DISTANT_MAX_CHARS`); when
+exceeded, the oldest whole Q&A pairs drop down to 1K (`_DISTANT_KEEP_CHARS`) —
+trimming past the cap in one step keeps the section byte-stable for many
+exchanges afterward, the same stepping philosophy as the group drop.
+
+Cache accounting for the roll: distant sits early in the prefix, so changing it
+invalidates everything after — but the gap roll happens only after ≥2h of
+silence, when the implicit cache is cold anyway (free), and the budget roll
+moves distant's young edge and recent's old edge in the **same event** (one
+invalidation, not two).
+
+### Oversized-turn guard
+
+There is **no intra-turn compaction**: the current exchange grows append-only
+at full fidelity, and prefix caching keeps re-sending it cheap. Two guards
+bound a runaway turn, both forcing a final text response with no more tools:
+the per-agent tool-round cap, and an overflow stop when the live context nears
+the model's window (`CONTEXT_OVERFLOW_TOKENS`, 150k — below the smallest
+supported window, leaving headroom for the forced final call itself).
 
 ---
 
@@ -212,11 +244,15 @@ This reset is scoped to scheduled jobs; interactive sessions are untouched.
 ## Quick checklist before touching this area
 
 - Adding per-turn context? It goes in `build_context_messages` (the CTX tail),
-  never wedged into the prefix.
-- Appending to the live message list mid-turn? Append to `prefix`, not to a list
-  that already has CTX at the end.
-- Tempted to prune tool rounds from history to save tokens? They're already
-  ~15-token pointers; fix caching instead.
+  never wedged into the prefix. The gap-roll `SESSION NOTE` follows this rule.
+- Appending to the live message list mid-turn? Append to `current_exchange` and
+  let `build_prompt` re-append CTX last — never to a list that already has CTX
+  at the end.
+- Tempted to prune tool rounds from recent history to save tokens? They're
+  already folded compact; old exchanges already roll into the distant Q&A
+  section. Fix caching instead.
+- Touching `roll_distant` / the window constants? Keep drops in groups and trims
+  past the cap — per-turn slides defeat prefix caching.
 - Adding a thinking/Anthropic model? Set `replay_reasoning: true` for it.
 - A new kind of stateless recurring job? Confirm it should reset per fire like
   scheduled jobs (state in files, not transcript).

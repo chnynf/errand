@@ -31,6 +31,11 @@ SHARED_SOUL_INCLUDE = "{{ include:SHARED_SOUL }}"
 SHARED_NOTES_INDEX_INCLUDE = "{{ include:SHARED_NOTES_INDEX }}"
 AGENT_PROFILE_INCLUDE = "{{ include:AGENT_PROFILE }}"
 
+# Model-facing marker for a KB-root-absolute path (mirrors files.KB_ROOT_MARKER).
+# Preloaded resources and the links inside them are addressed this way so the
+# model can pass any path verbatim to read_file.
+KB_ROOT_MARKER = "[kb-root]/"
+
 # Default user zone. Paw is UTC-internal; this is only the human-facing
 # reference shown to the model alongside UTC, and the default zone the
 # scheduler assumes when the user does not name one.
@@ -106,9 +111,12 @@ class PromptAssembler:
         *,
         context_summary: str | None = None,
         instruction: str | None = None,
+        session_note: str | None = None,
     ) -> list[dict]:
         """Build volatile per-turn context messages outside the cached system prompt."""
         parts = [_current_context()]
+        if session_note:
+            parts.append(f"SESSION NOTE:\n{session_note}")
         if context_summary:
             parts.append(f"CONTEXT SUMMARY:\n{context_summary}")
         if instruction:
@@ -122,13 +130,16 @@ class PromptAssembler:
         *,
         context_summary: str | None = None,
         instruction: str | None = None,
+        session_note: str | None = None,
     ) -> list[dict]:
         """Assemble one model call as four explicit sections, in order:
 
         1. system            -- soul, indexes, tool catalog (static, cacheable)
-        2. history           -- prior exchanges, compacted (from memory)
+        2. history           -- prior exchanges: distant (Q&A-condensed) then
+                                recent (full folded), both from memory
         3. current_exchange  -- this exchange, full and uncompacted (live)
-        4. context           -- time + rolling summary + instruction (volatile)
+        4. context           -- time + session note + rolling summary +
+                                instruction (volatile)
 
         The cacheable prefix is sections 1-3: it grows append-only within a turn
         (only ``current_exchange`` gains messages) and stays byte-identical
@@ -144,6 +155,7 @@ class PromptAssembler:
             *self.build_context_messages(
                 context_summary=context_summary,
                 instruction=instruction,
+                session_note=session_note,
             ),
         ]
 
@@ -180,30 +192,27 @@ class PromptAssembler:
         resource_path: Optional[str],
         scope_hint: str = "kb",
     ) -> str:
-        """Render a prompt resource with logical path + base path metadata.
+        """Render a prompt resource, labelled with its own ``[kb-root]/`` path.
 
-        The goal is to let the model resolve relative references inside the
-        loaded content without exposing absolute filesystem paths.
+        The model addresses every file the same way -- ``[kb-root]/<path>`` --
+        so the links inside the loaded content are passed verbatim to read_file
+        with no per-file base and no absolute filesystem paths exposed.
         """
         if not resource_path:
             return ""
         content = self._load_prompt_resource(resource_path) or ""
-        logical_path, base_path = self._logical_path_and_base(
-            resource_path, scope_hint=scope_hint
-        )
+        logical_path = self._logical_path(resource_path, scope_hint=scope_hint)
         header = [
-            f"--- BEGIN PROMPT RESOURCE: {name} ---",
-            f"Logical path: {logical_path}",
-            f"Base path: {base_path}",
-            "Already loaded here -- do not read_file it again; only the leaf "
-            "files it links to.",
+            f"--- BEGIN PROMPT RESOURCE: {name} ({KB_ROOT_MARKER}{logical_path}) ---",
+            "Already in context -- do not read_file this. To open anything it",
+            "lists, pass the `[kb-root]/...` path verbatim to read_file.",
             "",
         ]
         footer = ["", f"--- END PROMPT RESOURCE: {name} ---"]
         return "\n".join(header) + content + "\n".join(footer)
 
-    def _logical_path_and_base(self, resource_path: str, *, scope_hint: str) -> tuple[str, str]:
-        """Return (logical_path, base_path) for a prompt resource."""
+    def _logical_path(self, resource_path: str, *, scope_hint: str) -> str:
+        """Return the KB-root-relative path for a prompt resource (no marker)."""
         abs_path = Path(os.path.expanduser(str(resource_path))).resolve()
         roots = self._file_access.scopes.get(scope_hint).roots if self._file_access.scopes.get(scope_hint) else []
         roots_expanded = [Path(os.path.expanduser(str(r))).resolve() for r in roots]
@@ -214,5 +223,4 @@ class PromptAssembler:
                 break
             except ValueError:
                 continue
-        base = "/".join(logical.split("/")[:-1])
-        return logical, f"{base}/" if base else "./"
+        return logical

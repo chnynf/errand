@@ -163,13 +163,30 @@ def test_read_file_with_base_path(kb: Path):
     assert ft.read_file("a.md", base_path="notes").startswith("alpha")
 
 
+def test_read_file_with_kb_root_marker(kb: Path):
+    # The canonical model-facing form: a `[kb-root]/...` path passed verbatim.
+    assert ft.read_file("[kb-root]/INDEX.md").startswith("# Index")
+    assert ft.read_file("[kb-root]/notes/a.md").startswith("alpha")
+
+
+def test_kb_root_marker_takes_precedence_over_base_path(kb: Path):
+    # The marker is absolute against the KB root; base_path must be ignored.
+    assert ft.read_file("[kb-root]/notes/a.md", base_path="/nonexistent").startswith("alpha")
+
+
+async def test_kb_root_marker_works_for_list_and_write(kb: Path):
+    assert "a.md" in ft.list_dir("[kb-root]/notes").splitlines()
+    assert "Wrote" in await ft.write_file("[kb-root]/notes/new.md", "hi")
+    assert (kb / "notes" / "new.md").read_text() == "hi"
+
+
 def test_read_file_not_found_suggests_real_path(kb: Path):
-    # Wrong relative prefix: the file lives at notes/a.md, but the model guessed
-    # the bare name. The error should point at the real scope-relative path so
-    # no separate find_files round-trip is needed.
+    # Wrong prefix: the file lives at notes/a.md, but the model guessed the bare
+    # name. The error should point at the real path as a verbatim-usable
+    # `[kb-root]/...` string so no separate find_files round-trip is needed.
     result = ft.read_file("a.md")
     assert result.startswith("Error: Not a file:")
-    assert "notes/a.md" in result
+    assert "[kb-root]/notes/a.md" in result
 
 
 def test_read_file_truncates_oversized_with_notice(kb: Path):

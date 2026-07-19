@@ -12,6 +12,12 @@ agent loop (skeleton tool-call anchors + compacted tool results, see
 therefore a plain windowed slice: no role translation, no per-record rendering.
 The current, in-flight exchange never lives here -- the loop carries it live at
 full fidelity until it finishes.
+
+History replays in two resolutions. Exchanges leave the recent (full-folded)
+log for the ``distant`` section -- compacted to just the user text and the
+final assistant text -- when either a >=2h silence gap ends the conversation
+or the recent token budget pushes them out (see ``roll_distant``). Replay is
+``distant + recent``, both plain chat messages.
 """
 
 from __future__ import annotations
@@ -36,6 +42,16 @@ _HISTORY_TOKEN_BUDGET = 10_000
 # one exchange always survives (4 - 3 = 1).
 _HISTORY_DROP_EXCHANGES = 3
 _HISTORY_MIN_EXCHANGES = 1
+# A silence gap this long ends a "conversation": on the next message every
+# recent exchange rolls into the distant section (compacted to Q&A). The
+# provider prefix cache is long cold after such a gap, so the roll is free.
+_DISTANT_GAP_SECONDS = 2 * 3600
+# Distant-section budget in content chars. When the cap is exceeded, the oldest
+# whole Q&A pairs are dropped down to the keep target (not just below the cap),
+# so the section stays byte-stable across many exchanges for prefix caching --
+# the same stepping philosophy as _HISTORY_DROP_EXCHANGES above.
+_DISTANT_MAX_CHARS = 2_000
+_DISTANT_KEEP_CHARS = 1_000
 # Characters that are illegal in Windows filenames (e.g. ``:`` in WeChat and
 # scheduled session ids). Mapped to ``_`` so files stay cross-platform safe.
 _FILENAME_ILLEGAL = '<>:"/\\|?*'
@@ -80,6 +96,9 @@ class Memory:
             data["history"] = [
                 e for e in data.get("history", []) if isinstance(e.get("message"), dict)
             ]
+            # Sessions saved before the distant section existed load with an
+            # empty one.
+            data.setdefault("distant", [])
             return data
         return self._create_new_session()
 
@@ -88,6 +107,7 @@ class Memory:
             "session_id": self.session_id,
             "created_at": time.time(),
             "history": [],
+            "distant": [],
             "context_summary": None,
             "metadata": {},
             "token_summary": {
@@ -162,6 +182,11 @@ class Memory:
         history = self.data.get("history") or []
         if history:
             return float(history[-1].get("timestamp") or 0)
+        # After a gap roll the recent log is empty but the session is not new;
+        # the distant section still carries the last activity time.
+        distant = self.data.get("distant") or []
+        if distant:
+            return float(distant[-1].get("timestamp") or 0)
         return float(self.data.get("created_at") or 0) or None
 
     @staticmethod
@@ -201,19 +226,138 @@ class Memory:
             first += _HISTORY_DROP_EXCHANGES
         return starts[first]
 
-    def build_history_messages(self) -> list[dict]:
-        """Return the windowed history as provider-ready chat messages.
+    def roll_distant(self, now: float) -> bool:
+        """Migrate old exchanges into the distant section; True on a gap roll.
 
-        The log already stores folded chat messages, so this is a plain slice:
-        budgeted by tokens (see ``_history_window_start``) and cut only on
-        exchange boundaries, so skeleton-anchor/tool pairs stay intact and the
-        window start holds steady across exchanges for prefix caching.
+        Called by the loop at exchange start, before history is built. Two
+        triggers, whichever fires:
+
+        - Silence gap: ``now`` is >= ``_DISTANT_GAP_SECONDS`` past the last
+          activity, so the previous conversation is over -- every recent
+          exchange rolls into distant. The provider prefix cache is long cold
+          after such a gap, so this invalidation costs nothing.
+        - Token budget: the recent log exceeds ``_HISTORY_TOKEN_BUDGET``, so
+          the same group-drop that used to silently window old exchanges out
+          (see ``_history_window_start``) now routes them into distant. The
+          drop cadence is unchanged, so distant's young edge and recent's old
+          edge move in the same single cache-invalidation event.
+
+        Either way the migrated exchanges are compacted to Q&A pairs and the
+        distant section is re-trimmed to its char budget.
         """
+        history = self.data["history"]
+        distant = self.data.setdefault("distant", [])
+        last = self.last_activity_at()
+        gap_roll = bool(history) and last is not None and (
+            now - last >= _DISTANT_GAP_SECONDS
+        )
+        if gap_roll:
+            distant.extend(self._compact_exchanges(history))
+            self.data["history"] = []
+        else:
+            starts = self._exchange_starts()
+            if starts:
+                start = self._history_window_start(starts)
+                if start > 0:
+                    distant.extend(self._compact_exchanges(history[:start]))
+                    self.data["history"] = history[start:]
+        self._trim_distant()
+        return gap_roll
+
+    @staticmethod
+    def _compact_exchanges(entries: list[dict]) -> list[dict]:
+        """Compact whole exchanges to distant Q&A entries.
+
+        Per exchange: the ``user`` message plus the last assistant message that
+        has text content. Tool anchors and tool messages are dropped together
+        (an anchor without its results would be an illegal message), so every
+        compacted exchange replays as a legal ``[user, assistant]`` pair.
+        """
+        exchanges: list[list[dict]] = []
+        for entry in entries:
+            if entry["message"].get("role") == "user" or not exchanges:
+                exchanges.append([])
+            exchanges[-1].append(entry)
+
+        compacted: list[dict] = []
+        for exchange in exchanges:
+            user = next(
+                (e for e in exchange if e["message"].get("role") == "user"), None
+            )
+            final = next(
+                (
+                    e
+                    for e in reversed(exchange)
+                    if e["message"].get("role") == "assistant"
+                    and e["message"].get("content")
+                ),
+                None,
+            )
+            if not (user and final):
+                continue
+            compacted.append(
+                {
+                    "timestamp": user["timestamp"],
+                    "message": {
+                        "role": "user",
+                        "content": str(user["message"].get("content") or ""),
+                    },
+                }
+            )
+            compacted.append(
+                {
+                    "timestamp": final["timestamp"],
+                    "message": {
+                        "role": "assistant",
+                        "content": str(final["message"]["content"]),
+                    },
+                }
+            )
+        return compacted
+
+    @staticmethod
+    def _distant_chars(entries: list[dict]) -> int:
+        return sum(len(str(e["message"].get("content") or "")) for e in entries)
+
+    def _trim_distant(self) -> None:
+        """Drop oldest whole Q&A pairs once distant exceeds its char cap.
+
+        Trims down to ``_DISTANT_KEEP_CHARS`` (not just below the cap), so the
+        section start then holds steady across many exchanges -- the same
+        stepping that keeps the recent window prefix-cacheable. Never splits a
+        pair; a single oversized pair survives intact.
+        """
+        distant = self.data.get("distant") or []
+        if self._distant_chars(distant) <= _DISTANT_MAX_CHARS:
+            return
+        starts = [
+            i for i, e in enumerate(distant) if e["message"].get("role") == "user"
+        ]
+        first = 0
+        remaining = self._distant_chars(distant)
+        while remaining > _DISTANT_KEEP_CHARS and first + 1 < len(starts):
+            dropped = distant[starts[first]:starts[first + 1]]
+            remaining -= self._distant_chars(dropped)
+            first += 1
+        self.data["distant"] = distant[starts[first]:] if starts else []
+
+    def build_history_messages(self) -> list[dict]:
+        """Return distant + recent history as provider-ready chat messages.
+
+        Both sections already store chat messages, so this is concatenation of
+        two plain slices: the whole distant section (char-budgeted at roll
+        time), then the token-budgeted recent window (see
+        ``_history_window_start``), cut only on exchange boundaries so
+        skeleton-anchor/tool pairs stay intact and the window start holds
+        steady across exchanges for prefix caching. ``roll_distant`` normally
+        keeps recent within budget already; the windowing here is the backstop.
+        """
+        distant = [e["message"] for e in self.data.get("distant") or []]
         starts = self._exchange_starts()
         if not starts:
-            return []
+            return distant
         start = self._history_window_start(starts)
-        return [e["message"] for e in self.data["history"][start:]]
+        return distant + [e["message"] for e in self.data["history"][start:]]
 
     async def archive_session(self, start_new: bool = True) -> None:
         if os.path.exists(self.session_file):

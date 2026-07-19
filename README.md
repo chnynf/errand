@@ -248,9 +248,11 @@ log *is* the prompt history. No translation layers.
 
 ```text
 1. system            — soul, indexes, tool catalog          (static)
-2. history           — prior exchanges, folded compact      (from the log)
+2. history           — distant (Q&A-condensed), then        (from the log)
+                       recent exchanges, folded compact
 3. current exchange  — this exchange, live, full fidelity   (in memory)
-4. context           — time + rolling summary, very short   (volatile, last)
+4. context           — time + session note + rolling        (volatile, last)
+                       summary, very short
 ```
 
 Sections 1–3 form a stable, append-only prefix: within an exchange only
@@ -293,13 +295,35 @@ tool result: <first 500 chars>… [2300 chars total]
 If exact text from a file is needed again in a later exchange, the model calls
 `read_file` again — files themselves are the durable memory.
 
-### History is a token-budgeted window of whole exchanges
+### History replays in two resolutions: distant + recent
 
-Replay is a plain slice of the log, budgeted by tokens (default 10K; the
-system prompt is not counted). When over budget, the oldest exchanges drop in
-groups of 3, always keeping at least one — so the window start holds steady
-across turns and the cached prefix survives. Cuts land only on exchange
-boundaries, keeping anchor/tool pairs intact.
+Recent history is a plain slice of the log, budgeted by tokens (default 10K;
+the system prompt is not counted). Cuts land only on exchange boundaries,
+keeping anchor/tool pairs intact.
+
+Older exchanges don't vanish — they move into the **distant** section,
+compacted to just the user text and the final assistant text (tool anchors and
+results drop together, so every pair stays a legal message sequence). An
+exchange rolls recent → distant when either trigger fires
+(`Memory.roll_distant`, called at exchange start):
+
+- **Silence gap ≥ 2h** — a long break ends the conversation: *everything*
+  rolls to distant, and a `SESSION NOTE` in the volatile block tells the model
+  to treat the new message as a fresh conversation. This is what keeps a
+  forever-session chat (WeChat) from replaying yesterday's thread as if it
+  were mid-flight.
+- **Token budget overflow** — the oldest exchanges roll in groups of 3, always
+  keeping at least one, so the recent window start holds steady across turns
+  and the cached prefix survives.
+
+Distant is itself capped at 2K chars of content; when exceeded, the oldest
+whole Q&A pairs drop down to 1K — trimming past the cap in one step keeps the
+section byte-stable across many exchanges, for the same prefix-caching reason.
+
+Why the cache math works out: the gap roll rewrites the prompt near its start,
+but after 2h of silence the provider cache is cold anyway, so that
+invalidation is free. The budget roll moves distant's young edge and recent's
+old edge in the same event — one cache invalidation, not two.
 
 ### Continuity rides on a rolling summary
 
@@ -318,7 +342,12 @@ messages = [
   # ── 1. system (static, cached) ────────────────────────────────
   {"role": "system", "content": "<soul + indexes + tool catalog>"},
 
-  # ── 2. history: exchange 1, folded at step-out ────────────────
+  # ── 2. history, distant: yesterday's chat, rolled after a >2h
+  #      gap — condensed to bare Q&A pairs, tool traffic gone ────
+  {"role": "user", "content": "帮我查一下明天的天气"},
+  {"role": "assistant", "content": "明天晴，30度。"},
+
+  # ── 2. history, recent: exchange 1, folded at step-out ────────
   {"role": "user", "content": "What's in my notes folder?"},
   {"role": "assistant", "tool_calls": [          # skeleton anchor
       {"id": "h1", "type": "function",
@@ -328,7 +357,7 @@ messages = [
       "tool result: ideas.md\npaw.md\nkb-paper.md [34 chars total]"},
   {"role": "assistant", "content": "You have three notes: ideas, paw, kb-paper."},
 
-  # ── 2. history: exchange 2, no tools → folds to a plain pair ──
+  # ── 2. history, recent: exchange 2, no tools → a plain pair ───
   {"role": "user", "content": "Remind me what paw is?"},
   {"role": "assistant", "content": "Paw is your personal agent harness project."},
 

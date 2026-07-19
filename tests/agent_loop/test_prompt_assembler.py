@@ -54,12 +54,13 @@ def test_system_prompt_includes_agent_profile_contents(tmp_path):
         ),
     )
     prompt = assembler.build_system_prompt()
-    assert "--- BEGIN PROMPT RESOURCE: SHARED_SOUL ---" in prompt
-    assert "Logical path: SOUL.md" in prompt
-    assert "Base path: ./" in prompt
-    assert "--- BEGIN PROMPT RESOURCE: AGENT_PROFILE ---" in prompt
-    assert "Logical path: INDEX.md" in prompt
-    assert "Base path: ./" in prompt
+    # The resource is labelled with its own [kb-root]/ path in the header.
+    assert "--- BEGIN PROMPT RESOURCE: SHARED_SOUL ([kb-root]/SOUL.md) ---" in prompt
+    assert "--- BEGIN PROMPT RESOURCE: AGENT_PROFILE ([kb-root]/INDEX.md) ---" in prompt
+    assert "pass the `[kb-root]/...` path verbatim to read_file" in prompt
+    # The old two-field labels are gone.
+    assert "Logical path:" not in prompt
+    assert "Base path:" not in prompt
     assert "# Shared Soul\n\nBe grounded." in prompt
     assert "# Test Profile\n\nBe concise." in prompt
     assert "{{ include:SHARED_SOUL }}" not in prompt
@@ -76,7 +77,7 @@ def test_system_prompt_includes_shared_notes_index(tmp_path):
     notes = tmp_path / "NOTES.md"
     profile = tmp_path / "INDEX.md"
     soul.write_text("# Soul", encoding="utf-8")
-    notes.write_text("# Notes Router\n\nLook in notes/inbox.md.", encoding="utf-8")
+    notes.write_text("# Notes Router\n\nLook in [kb-root]/notes/inbox.md.", encoding="utf-8")
     profile.write_text("# Profile", encoding="utf-8")
 
     assembler = PromptAssembler(
@@ -89,9 +90,8 @@ def test_system_prompt_includes_shared_notes_index(tmp_path):
         ),
     )
     prompt = assembler.build_system_prompt()
-    assert "--- BEGIN PROMPT RESOURCE: SHARED_NOTES_INDEX ---" in prompt
-    assert "Logical path: NOTES.md" in prompt
-    assert "Look in notes/inbox.md." in prompt
+    assert "--- BEGIN PROMPT RESOURCE: SHARED_NOTES_INDEX ([kb-root]/NOTES.md) ---" in prompt
+    assert "Look in [kb-root]/notes/inbox.md." in prompt
     assert "{{ include:SHARED_NOTES_INDEX }}" not in prompt
     # Order: soul, then notes, then agent profile.
     assert (
@@ -177,3 +177,16 @@ def test_context_messages_include_summary_and_instruction():
     assert "CONTEXT SUMMARY:\nctx body" in content
     assert "INSTRUCTION:\ndo thing" in content
     assert content.index("Now:") < content.index("CONTEXT SUMMARY:")
+
+
+def test_context_messages_include_session_note_when_set():
+    # The gap-roll note rides in the volatile block (last position), so it can
+    # never break the cacheable system+history+current prefix.
+    assembler = PromptAssembler()
+    note = "New conversation: previous activity was ~8.0h ago."
+    content = assembler.build_context_messages(session_note=note)[0]["content"]
+    assert f"SESSION NOTE:\n{note}" in content
+    assert content.index("Now:") < content.index("SESSION NOTE:")
+
+    # Omitted -> block unchanged.
+    assert "SESSION NOTE:" not in assembler.build_context_messages()[0]["content"]

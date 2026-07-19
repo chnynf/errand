@@ -38,7 +38,7 @@ class _Registry:
 
 
 class _PromptAssembler:
-    def build_prompt(self, history_messages, current_exchange, *, context_summary=None, instruction=None):
+    def build_prompt(self, history_messages, current_exchange, *, context_summary=None, instruction=None, session_note=None):
         return [
             {"role": "system", "content": "s"},
             *history_messages,

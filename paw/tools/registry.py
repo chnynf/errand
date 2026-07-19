@@ -43,7 +43,7 @@ _SKIP_MODULES = {"__init__", "registry"}
 TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
     "- Think before calling. Avoid unnecessary tool calls, such as file reads.\n"
-    "- For file reads, resolve the path from the index and read it directly; do not search or list files.\n"
+    "- For file reads, pass the index's `[kb-root]/...` path verbatim to read_file; do not search or list files.\n"
     "- Batch work whenever possible; make independent calls in parallel. For example, combine edits into one run."
 )
 

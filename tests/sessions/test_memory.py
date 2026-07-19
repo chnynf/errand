@@ -149,6 +149,141 @@ def test_safe_stem_replaces_windows_illegal_chars():
     assert _safe_stem('a:b/c\\d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
 
 
+# -- Distant history (two-tier replay) --------------------------------------
+
+
+def test_gap_roll_moves_all_history_to_distant_qa(monkeypatch, tmp_path):
+    # A >=2h silence gap ends the conversation: every recent exchange rolls
+    # into distant, compacted to [user, assistant] pairs (no anchors/tools).
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("gap-session")
+    memory.add_exchange(_exchange("q0", "a0", tool_note="tool stuff"))
+    memory.add_exchange(_exchange("q1", "a1"))
+    last = memory.last_activity_at()
+
+    assert memory.roll_distant(last + 2 * 3600) is True
+
+    assert memory.data["history"] == []
+    msgs = memory.build_history_messages()
+    assert msgs == [
+        {"role": "user", "content": "q0"},
+        {"role": "assistant", "content": "a0"},
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    assert not any("tool_calls" in m or m["role"] == "tool" for m in msgs)
+
+
+def test_no_roll_under_gap_or_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("nogap-session")
+    memory.add_exchange(_exchange("q0", "a0", tool_note="keep me"))
+    folded = list(memory.data["history"])
+    last = memory.last_activity_at()
+
+    assert memory.roll_distant(last + 3600) is False  # only 1h of silence
+
+    assert memory.data["history"] == folded
+    assert memory.data["distant"] == []
+
+
+def test_token_overflow_migrates_oldest_group_to_distant(monkeypatch, tmp_path):
+    # The budget group-drop now routes exchanges into distant instead of
+    # silently windowing them out; the drop cadence (groups of 3) is unchanged.
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._HISTORY_TOKEN_BUDGET", 500)
+    monkeypatch.setattr("paw.sessions.memory._DISTANT_MAX_CHARS", 100_000)
+    memory = Memory("budget-session")
+    for i in range(5):  # each exchange ~100 tokens -> over the 500 budget
+        memory.add_exchange(
+            [
+                {"role": "user", "content": f"q{i}".ljust(200, "x")},
+                {"role": "assistant", "content": f"a{i}".ljust(200, "y")},
+            ]
+        )
+    last = memory.last_activity_at()
+
+    assert memory.roll_distant(last + 60) is False  # budget, not gap
+
+    # Oldest 3 exchanges moved (as Q&A) into distant; recent starts at q3.
+    distant_users = [
+        e["message"]["content"][:2]
+        for e in memory.data["distant"]
+        if e["message"]["role"] == "user"
+    ]
+    assert distant_users == ["q0", "q1", "q2"]
+    assert memory.data["history"][0]["message"]["content"].startswith("q3")
+    # Replay is distant + recent, in order.
+    msgs = memory.build_history_messages()
+    assert msgs[0]["content"][:2] == "q0"
+    assert msgs[-1]["content"].startswith("a4")
+
+
+def test_distant_cap_drops_oldest_whole_pairs(monkeypatch, tmp_path):
+    # Over the char cap, distant trims down to the keep target, oldest whole
+    # Q&A pairs first, never splitting a pair.
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    monkeypatch.setattr("paw.sessions.memory._DISTANT_MAX_CHARS", 500)
+    monkeypatch.setattr("paw.sessions.memory._DISTANT_KEEP_CHARS", 250)
+    memory = Memory("cap-session")
+    for i in range(6):  # each pair ~200 chars -> 1200 total, cap 500
+        memory.add_exchange(
+            [
+                {"role": "user", "content": f"q{i}".ljust(100, "x")},
+                {"role": "assistant", "content": f"a{i}".ljust(100, "y")},
+            ]
+        )
+    last = memory.last_activity_at()
+    memory.roll_distant(last + 3 * 3600)  # gap roll: all 6 pairs -> distant
+
+    distant = memory.data["distant"]
+    # Trimmed to <=250 chars: only the newest pair survives, intact.
+    assert [e["message"]["role"] for e in distant] == ["user", "assistant"]
+    assert distant[0]["message"]["content"].startswith("q5")
+    assert distant[1]["message"]["content"].startswith("a5")
+
+
+def test_last_activity_falls_back_to_distant(monkeypatch, tmp_path):
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("fallback-session")
+    memory.add_exchange(_exchange("q0", "a0"))
+    last = memory.last_activity_at()
+    memory.roll_distant(last + 2 * 3600)
+
+    assert memory.data["history"] == []
+    assert memory.last_activity_at() == last  # distant keeps the timestamp
+
+
+async def test_distant_persists_and_legacy_sessions_load(monkeypatch, tmp_path):
+    monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
+    memory = Memory("persist-session")
+    memory.add_exchange(_exchange("q0", "a0"))
+    memory.roll_distant(memory.last_activity_at() + 2 * 3600)
+    await memory.save_session()
+
+    reloaded = Memory("persist-session")
+    assert reloaded.data["distant"] == memory.data["distant"]
+    assert reloaded.build_history_messages() == [
+        {"role": "user", "content": "q0"},
+        {"role": "assistant", "content": "a0"},
+    ]
+
+    # A pre-distant session file loads with an empty distant section.
+    import json
+    (tmp_path / "legacy-session.json").write_text(
+        json.dumps({
+            "session_id": "legacy-session",
+            "created_at": 1.0,
+            "history": [],
+            "context_summary": None,
+            "metadata": {},
+            "token_summary": {"input_tokens": 0, "output_tokens": 0},
+        }),
+        encoding="utf-8",
+    )
+    assert Memory("legacy-session").data["distant"] == []
+
+
 def test_update_token_usage_accumulates_counts(monkeypatch, tmp_path):
     monkeypatch.setattr("paw.sessions.memory._SESSION_DIR", tmp_path)
     memory = Memory("count-session")
