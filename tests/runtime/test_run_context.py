@@ -59,6 +59,22 @@ def test_footer_shows_breakdown_only_when_multiple_agents():
     assert "└" in footer
 
 
+def test_footer_reports_ai_call_count():
+    t = UsageTracker()
+    t.record(_usage(100, 10), agent_id="generalist")
+    t.record(_usage(200, 20), agent_id="generalist")
+    assert "*AI calls: 2*" in t.render_footer()
+
+
+def test_footer_breakdown_includes_per_agent_calls():
+    t = UsageTracker()
+    t.record(_usage(100, 10), agent_id="generalist")
+    t.record(_usage(50, 5), agent_id="notes-organizer")
+    t.record(_usage(30, 3), agent_id="notes-organizer")
+    footer = t.render_footer()
+    assert "notes-organizer: 80 in, 8 out, 2 calls" in footer
+
+
 def test_cache_creation_tokens_counted_without_cost():
     """Anthropic-style cache-write tokens are still COUNTED (model-agnostic),
     even though Paw no longer prices them."""

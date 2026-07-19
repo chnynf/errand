@@ -133,3 +133,27 @@ async def test_session_total_includes_subagent_tokens(monkeypatch, tmp_path):
     assert summary["input_tokens"] == 110
     assert summary["output_tokens"] == 45
     assert "*Session total: 110 in, 45 out*" in result
+
+
+async def test_session_total_counts_subagent_sharing_parent_agent_id(monkeypatch, tmp_path):
+    """Regression: a sub-agent running under the SAME agent_id as its parent used
+    to be skipped by the id-based rollup, so its tokens showed in the exchange
+    footer but not the session total -- making the session total read LOWER than
+    this round. The session total must include it and never dip below the round.
+    """
+    loop = _make_loop(monkeypatch, tmp_path)  # loop.agent_id == "test"
+    loop.brain = _TextBrain()                 # parent records under "test" too
+
+    rc = RunContext.root()
+    # Delegated sub-agent shares the parent's id -> lands in the same bucket.
+    rc.usage.record({"input_tokens": 100, "output_tokens": 40}, agent_id="test")
+
+    result = await loop.process_input("hi", metadata={"_run_context": rc})
+
+    summary = loop.memory.data["token_summary"]
+    # Parent's own call (10/5) plus the same-id sub-agent (100/40).
+    assert summary["input_tokens"] == 110
+    assert summary["output_tokens"] == 45
+    assert "*Session total: 110 in, 45 out*" in result
+    # And the footer's this-round total is not greater than the session total.
+    assert "*Tokens: 110 in, 45 out*" in result

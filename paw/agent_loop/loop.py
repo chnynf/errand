@@ -158,6 +158,15 @@ class AgentLoop:
         # final response below) set this, keeping the volatile block minimal.
         instruction: Optional[str] = None
 
+        # Session-total baseline, captured before this exchange adds anything.
+        # At step-out the root rebuilds the session total as baseline + this
+        # exchange's full cross-agent usage (see below), so it always includes
+        # delegated work and can never read lower than this exchange's footer.
+        base_ts = self.memory.data.get("token_summary") or {}
+        base_input = base_ts.get("input_tokens", 0) or 0
+        base_output = base_ts.get("output_tokens", 0) or 0
+        base_cache_read = base_ts.get("cache_read_tokens", 0) or 0
+
         while True:
             await _progress(f"Thinking... [{self.agent_id}]")
             messages = self.prompt_assembler.build_prompt(
@@ -353,25 +362,29 @@ class AgentLoop:
                 f"response may be incomplete]\n\n{final_response}"
             )
 
-        tools_str = ", ".join(dict.fromkeys(round_tools_used)) or "None"
+        # Count each tool's invocations, preserving first-seen order, so the
+        # footer shows how many times each tool ran (e.g. "read_file (3)").
+        tool_counts: dict[str, int] = {}
+        for name in round_tools_used:
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+        tools_str = ", ".join(f"{name} ({n})" for name, n in tool_counts.items()) or "None"
 
-        # Roll delegated sub-agents' tokens into this session's lifetime total so
-        # the persisted "Session total" reflects delegated work, not just this
-        # agent's own calls. The parent's own calls were already accumulated
-        # per-call during the loop; here we add the OTHER agents' buckets from the
-        # shared per-exchange tracker. Only the user-facing root does this (the
-        # tracker is per-exchange and sub-agent loops keep their own per-session
-        # totals), so nested delegation isn't double-counted.
+        # Rebuild this session's lifetime total as the pre-exchange baseline plus
+        # this exchange's FULL cross-agent usage (the same total the footer
+        # reports). The per-call updates during the loop only captured this
+        # agent's own direct calls; a delegated sub-agent's tokens live in the
+        # shared tracker but never hit this session via those updates -- and when
+        # a sub-agent runs under the SAME agent_id as its parent they can't be
+        # told apart by id at all. Setting baseline + tracker total sidesteps
+        # that: it counts every agent exactly once, so the session total can
+        # never read lower than the exchange footer. Only the user-facing root
+        # does this; sub-agent loops keep their own per-session totals.
         if not is_subagent:
-            for ag_id, bucket in run_context.usage.per_agent().items():
-                if ag_id != self.agent_id:
-                    self.memory.update_token_usage(
-                        {
-                            "input_tokens": bucket.input_tokens,
-                            "output_tokens": bucket.output_tokens,
-                            "cache_read_tokens": bucket.cache_read_tokens,
-                        }
-                    )
+            self.memory.set_token_usage(
+                input_tokens=base_input + run_context.usage.input_tokens,
+                output_tokens=base_output + run_context.usage.output_tokens,
+                cache_read_tokens=base_cache_read + run_context.usage.cache_read_tokens,
+            )
 
         # The tracker holds this whole exchange's usage (this agent + any
         # sub-agents it delegated to). Tools stay loop-local. cache_read is a

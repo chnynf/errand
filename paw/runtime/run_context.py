@@ -138,6 +138,7 @@ class UsageTracker:
         lines = [
             f"*Models used: {models_str}*",
             f"*Tokens: {self.input_tokens} in{cache_str}, {self.output_tokens} out*",
+            f"*AI calls: {self.calls}*",
         ]
         if self._validation_catches:
             lines.append(f"*Validation catches: {self._validation_catches}*")
@@ -147,7 +148,7 @@ class UsageTracker:
             for agent_id, bucket in self._by_agent.items():
                 lines.append(
                     f"*  └ {agent_id}: {bucket.input_tokens} in, "
-                    f"{bucket.output_tokens} out*"
+                    f"{bucket.output_tokens} out, {bucket.calls} calls*"
                 )
         return "\n".join(lines)
 

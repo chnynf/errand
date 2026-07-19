@@ -133,6 +133,28 @@ class Memory:
         summary.setdefault("cache_read_tokens", 0)
         summary["cache_read_tokens"] += usage.get("cache_read_tokens", 0) or 0
 
+    def set_token_usage(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int,
+    ) -> None:
+        """Set ``token_summary`` to absolute lifetime totals.
+
+        Used at exchange step-out to rebuild the session total as the
+        pre-exchange baseline plus this exchange's full cross-agent usage,
+        rather than accumulating per call. This is what keeps a session total
+        from ever reading lower than the exchange it just reported.
+        """
+        summary = self.data.setdefault(
+            "token_summary",
+            {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0},
+        )
+        summary["input_tokens"] = input_tokens
+        summary["output_tokens"] = output_tokens
+        summary["cache_read_tokens"] = cache_read_tokens
+
     def set_context_summary(self, summary: Optional[str]) -> None:
         self.data["context_summary"] = summary
 
