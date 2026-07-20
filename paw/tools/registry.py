@@ -44,7 +44,8 @@ TOOL_USE_GUIDANCE = (
     "TOOL USE:\n"
     "- Think before calling. Avoid unnecessary tool calls, such as file reads.\n"
     "- For file reads, pass the index's `[kb-root]/...` path verbatim to read_file; do not search or list files.\n"
-    "- Batch work whenever possible; make independent calls in parallel. For example, combine edits into one run."
+    "- Batch independent calls: when no call needs another's result, emit them all in ONE response. "
+    "For example, when a task needs several known files, issue all the read_file calls together, not one per turn."
 )
 
 # Core tools kept as real native tool-calls (full schema + provider-side arg
