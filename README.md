@@ -411,23 +411,274 @@ flowchart TD
     Runtime --> Scheduler["scheduler: timed jobs"]
 ```
 
-| Component | Folder | Main API | Input | Output | Owns |
-| --- | --- | --- | --- | --- | --- |
-| Runtime | `paw/runtime/` | `PawApp.start()`, `stop()`, `handle_user_message()` | Config, enabled interfaces, normalized user messages | Started services, final replies | Process lifecycle, component wiring, and the `PawInterface`/`UserMessage`/`ReplyTarget` adapter contract (`paw/runtime/adapter.py`) that every interface implements |
-| Interfaces | `paw/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
-| Sessions | `paw/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
-| Agent Loop | `paw/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
-| Brain | `paw/brain/` | `Brain.decide(...)` | Provider-ready chat messages, tool schemas | Normalized model decision, usage, errors | LiteLLM routing, retry/fallback, model output parsing |
-| Tools | `paw/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
-| Scheduler | `paw/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
-| Config | `paw/config/` | `load_raw_config()`, `load_paw_config()` | `config.json`, env overrides | `PawConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
-| Prompt Assembly | `paw/agent_loop/` (`prompt_assembler.py`, `agent.md`) | `PromptAssembler.build_prompt(...)` | History + current exchange + volatile context | Four-section message list | Prompt structure and harness-level instructions |
+### Request flow, end to end
 
-`paw/wire_types.py` is deliberately not a component in this table: it's a single
-leaf file (no folder, no behavior) holding the tool-calling dataclasses
-(`ToolCall`, `ToolResult`, `ToolDefinition`, `BrainDecision`) that Brain, Tools,
-and Agent Loop exchange without depending on each other. It stays a flat file
-rather than a folder specifically so it can't be mistaken for a component.
+A message crosses every component exactly once on the way in and once on the
+way out:
+
+```text
+external event (Discord msg, stdin line, WeChat push, HTTP POST)
+  -> Interfaces:   normalizes to UserMessage(session_id, text, source, reply_to, metadata)
+  -> Runtime:      PawApp.handle_user_message(message)
+  -> Sessions:     SessionManager.process(session_id, text, metadata) -> AgentSession.process(...)
+  -> Agent Loop:   AgentLoop.process_input(text, metadata)   [may loop several rounds]
+       -> Brain:   Brain.decide(messages, tool_definitions) -> BrainDecision
+       -> Tools:   ToolRegistry.execute(name, params) -> ToolResult   (when BrainDecision has tool_calls)
+  <- Agent Loop:   final text, folded exchange appended to Memory
+  <- Sessions:     final text returned up the call stack
+  <- Runtime:      PawApp sends the text through message.reply_to
+  <- Interfaces:   ReplyTarget.send(text) posts it back on the original transport
+```
+
+Scheduled jobs join the same loop from the side: `SchedulerService` (in
+`scheduler/`) calls `PawApp.process_scheduled_job(session_id, text, name)`,
+which runs the identical Sessions -> Agent Loop -> Brain/Tools path, then
+`PawApp.deliver_scheduled_result(...)` hands the result to whichever
+interface implements `ScheduledDelivery`.
+
+| Component | Folder | Purpose |
+| --- | --- | --- |
+| Runtime | `paw/runtime/` | Owns process lifecycle; the hub every interface and the scheduler call into |
+| Interfaces | `paw/interfaces/` | Transport-specific translation only (Discord, CLI, WeChat, Web) |
+| Sessions | `paw/sessions/` | Per-session locking, caching, and history persistence |
+| Agent Loop | `paw/agent_loop/` | The think/act loop: brain call, tool execution, memory fold |
+| Brain | `paw/brain/` | Provider-agnostic model routing with retry/fallback |
+| Tools | `paw/tools/` | Tool discovery, schema generation, execution, scoped file access |
+| Scheduler | `paw/scheduler/` | Timed/recurring jobs, polled and delivered through runtime |
+| Config | `paw/config/` | Parses `config.json` into typed config every component reads |
+
+Full signatures, inputs/outputs, and wire types for each are below.
+
+### Runtime — `paw/runtime/`
+
+**Purpose:** builds `PawConfig` once, creates the `SessionManager` and
+`SchedulerService`, starts every enabled interface adapter, and is the single
+hub every adapter and the scheduler call back into.
+
+**Files:** `app.py` (`PawApp`, `run_paw`), `adapter.py` (the adapter
+contract), `run_context.py` (`RunContext`, `UsageTracker`, `FileReadCache`),
+`control.py` (control-command helpers: `/new`, `/reload`), `debug.py`
+(shared debug logging).
+
+```python
+class PawApp:
+    def __init__(self, *, config: PawConfig | None = None, debug: bool = False,
+                 interfaces: Iterable[str] | None = None): ...
+    async def start(self) -> None           # builds interfaces + scheduler, blocks until they exit
+    async def stop(self) -> None            # stops services, persists sessions
+    async def handle_user_message(self, message: UserMessage) -> None
+    async def process_scheduled_job(self, session_id: str, text: str, name: str) -> str
+    async def deliver_scheduled_result(self, task_session_id: str, message: str,
+                                        context_id: str | None = None) -> bool
+    async def archive_session(self, session_id: str, start_new: bool = False) -> None
+    def reload_prompt_resources(self, session_id: str, agent_id: str, *, soul: bool, profile: bool) -> None
+
+async def run_paw(debug: bool = False, interfaces: list[str] | None = None) -> None  # `python -m paw` entrypoint
+```
+
+- **Input:** `PawConfig`; a `UserMessage` from any adapter; a due-job trigger from `SchedulerService`.
+- **Output:** started/stopped adapter and scheduler tasks; the final reply sent back through the message's own `ReplyTarget`; scheduled/fallback results routed to whichever adapter implements `ScheduledDelivery` / `FallbackDelivery` (today only Discord does).
+- **Wire types it owns:** `PawInterface`, `ReplyTarget`, `UserMessage`, `ScheduledDelivery`, `FallbackDelivery` — all defined in `paw/runtime/adapter.py`. Every adapter under `paw/interfaces/` implements this contract to plug in; the dependency points from the adapters to runtime, never back, so the contract lives with its one true owner instead of a shared/neutral module.
+
+### Interfaces — `paw/interfaces/`
+
+**Purpose:** translate one external transport into the runtime's normalized
+`UserMessage`, and translate replies back into that transport's outbound
+call. No agent logic lives here.
+
+**Files:** `cli.py` (`CliInterface`, `ConsoleReplyTarget`),
+`discord_interface.py` (`DiscordInterface`, `DiscordReplyTarget`,
+`ApprovalView`), `wechat_interface.py` (`WeChatInterface`,
+`WeChatReplyTarget`), `web/interface.py` + `web/api.py` (`WebInterface`, the
+FastAPI dashboard).
+
+Every adapter implements the `PawInterface` protocol (`name`, `async
+start()`, `async stop()`) and constructs a `ReplyTarget` (`send`,
+`send_progress`, `request_approval`) per incoming message. Discord is
+currently the only adapter that also implements `ScheduledDelivery` /
+`FallbackDelivery`, since it's the only transport that can push a message to
+the user without one first arriving.
+
+- **Input:** platform-native events — Discord gateway messages, WeChat long-poll payloads, stdin lines, dashboard HTTP requests.
+- **Output:** `UserMessage(session_id, text, source, reply_to, metadata)` passed to `PawApp.handle_user_message`; outbound text sent through the adapter's own `ReplyTarget`.
+- **Wire types:** implements `PawInterface` / `ReplyTarget` / `ScheduledDelivery` / `FallbackDelivery` (owned by `runtime/adapter.py`); produces `UserMessage`.
+
+### Sessions — `paw/sessions/`
+
+**Purpose:** cache one `AgentSession` per session id, serialize concurrent
+turns on the same session with a lock, and persist conversation history to
+disk.
+
+**Files:** `manager.py` (`SessionManager`), `session.py` (`AgentSession`),
+`memory.py` (`Memory`).
+
+```python
+class SessionManager:
+    def get(self, session_id: str, *, agent_id: str | None = None, delegation_depth: int = 0) -> AgentSession
+    async def process(self, session_id: str, text: str, *, metadata: dict | None = None,
+                       agent_id: str | None = None) -> str
+    async def archive(self, session_id: str, *, start_new: bool = True, agent_id: str | None = None) -> None
+    async def shutdown(self) -> None
+
+class AgentSession:
+    async def process(self, text: str, metadata: dict | None = None) -> str   # delegates to its AgentLoop
+    async def archive(self, start_new: bool = False) -> None
+
+class Memory:                                    # one JSON file per session: paw/sessions/_data/<id>.json
+    def add_exchange(self, messages: list[dict]) -> None
+    def build_history_messages(self) -> list[dict]
+    def roll_distant(self, now: float) -> bool
+    def update_token_usage(self, usage: dict) -> None
+    async def save_session(self) -> None
+```
+
+- **Input:** `session_id`, raw user text, metadata (from runtime).
+- **Output:** final response text (from the underlying `AgentLoop`); a persisted `_data/<session>.json` file.
+- **Wire types:** none of its own — `Memory` stores and replays the same provider-ready chat-message dicts (`role` / `content` / `tool_calls` / ...) that `PromptAssembler` builds and the LLM API consumes. See "Context & Memory Design" above for the full history/compaction format.
+
+### Agent Loop — `paw/agent_loop/`
+
+**Purpose:** the think/act loop for one turn — ask Brain for a decision, run
+any tool calls through `ToolRegistry`, repeat until final text, then fold
+the finished exchange into `Memory`. `prompt_assembler.py` shares this folder
+rather than getting its own, because the running loop is the sole consumer
+of prompt assembly — Brain only ever sees the already-assembled messages.
+
+**Files:** `loop.py` (`AgentLoop`), `prompt_assembler.py`
+(`PromptAssembler`), `agent.md` (the runtime-frame template it renders).
+
+```python
+class AgentLoop:
+    def __init__(self, session_id="default", debug=False, *, agent_id=None,
+                 config=None, delegation_depth=0): ...
+    async def process_input(self, user_input: str, metadata: dict | None = None) -> str
+    def last_activity_at(self) -> float | None
+    async def shutdown(self) -> None
+
+class PromptAssembler:
+    def build_prompt(self, history_messages, current_exchange, *,
+                      context_summary=None, instruction=None, session_note=None) -> list[dict]
+    def build_system_prompt(self) -> str
+```
+
+- **Input:** user text + `metadata` (may carry `is_subagent`, `is_scheduled_task`, a shared `RunContext` for delegation, etc.); the session's `Memory`.
+- **Output:** final assistant text (with a usage footer appended at the root exchange); a folded exchange appended to `Memory`.
+- **Wire types:** consumes `ToolDefinition` (from `ToolRegistry`) and `BrainDecision` / `ToolCall` (from `Brain`); produces `ToolResult` (via `ToolRegistry.execute`) and the chat-message dicts `Memory` stores. See `paw/wire_types.py` and "Context & Memory Design" above for the full shapes.
+
+### Brain — `paw/brain/`
+
+**Purpose:** provider-agnostic model routing — iterate the agent's
+`model_strategy` fallback chain, ask each provider for a decision, retry or
+fall back to the next model on a retryable error.
+
+**Files:** `brain.py` (`Brain`), `providers/base.py` (`LLMProvider`,
+`ProviderRegistry`), `providers/litellm.py` (`LiteLLMProvider` — the only
+concrete provider today; routes every model through LiteLLM).
+
+```python
+class Brain:
+    def __init__(self, debug=False, *, agent_spec: AgentSpec | None = None,
+                 config: PawConfig | None = None): ...
+    async def decide(self, messages: list[dict], tool_definitions: list[ToolDefinition] | None = None,
+                      *, usage_tracker=None, session_id=None, ...) -> dict
+        # -> {"decision": BrainDecision, "usage": dict, "error"?: bool, "error_message"?: str}
+```
+
+- **Input:** provider-ready chat messages (the same dicts `PromptAssembler` builds), a `list[ToolDefinition]`.
+- **Output:** `BrainDecision.tool_calls` (`list[ToolCall]`) when the model wants to act, or `.text_response` when the turn is done.
+- **Wire types:** consumes `ToolDefinition`; produces `BrainDecision` / `ToolCall` — all from `paw/wire_types.py`. Brain never imports `tools/` or `agent_loop/`, so it stays reusable independent of Paw's specific tool implementation.
+
+### Tools — `paw/tools/`
+
+**Purpose:** auto-discover every `paw/tools/*.py` file as a callable tool —
+public module-level functions become tools, with the schema generated from
+the function signature and the description from its docstring — and execute
+them uniformly. This is the local equivalent of an MCP tool server.
+
+**Files:** `registry.py` (`ToolRegistry` — the only consumer-facing file);
+every other `.py` in the folder is a plugin: `files.py` (scoped
+read/write/search), `cli.py` (shell exec), `calculator.py`, `research.py`
+(web search), `email.py`, `notion_tasks.py`, `scheduler.py` (schedule /
+cancel jobs), `delegation.py` (`invoke_agent`, an in-process sub-agent),
+`external_agents.py` (`invoke_external_agent`, a subprocess CLI agent).
+
+```python
+class ToolRegistry:
+    def __init__(self, tools_dir=None, can_delegate=None, native_names=None): ...
+    def get_tool_definitions(self) -> list[ToolDefinition]
+    def validate_args(self, name: str, args: dict) -> str | None
+    async def execute(self, name: str, params: dict, context: dict | None = None) -> Any
+    def compact_interaction(self, call: ToolCall | None, result: ToolResult) -> str
+    def tool_summary(self) -> str        # catalog text rendered into the system prompt
+```
+
+- **Input:** a tool name + a params dict, plus an execution `context` dict carrying `agent_id` / `session_id` / `reply_to` / `run_context` / ...
+- **Output:** `list[ToolDefinition]` for Brain; a raw return value from `execute()` (wrapped into `ToolResult` by `AgentLoop`).
+- **Wire types:** produces `ToolDefinition`; only formats `ToolCall` / `ToolResult` for history (`compact_interaction`) — constructing and dispatching the actual calls happens in `AgentLoop`. All three types come from `paw/wire_types.py`, never from `brain/`, which is what keeps the registry swappable to a standalone MCP server without code changes.
+
+### Scheduler — `paw/scheduler/`
+
+**Purpose:** poll for due jobs and run each one through the runtime.
+
+**Files:** `service.py` (`SchedulerService`), `store.py` (`JobStore`,
+JSON-backed), `schedule.py` (pure schedule math: cron / `every` / `at`
+parsing, next-run computation).
+
+```python
+class SchedulerService:
+    def __init__(self, app: ScheduledApp, store: JobStore | None = None, poll_seconds: int = 10): ...
+    async def start(self) -> None        # ticks forever
+    async def run_tick(self) -> None     # one poll: due jobs -> run -> deliver
+
+class JobStore:
+    def add(self, ...) -> dict
+    def get_due(self, now_ts: float) -> list[dict]
+    def update(self, job_id: str, **fields) -> None
+    def disable(self, job_id: str) -> bool
+```
+
+- **Input:** the current time; `paw/scheduler/jobs.json`.
+- **Output:** calls into `app.process_scheduled_job(session_id, text, name)` and `app.deliver_scheduled_result(...)`.
+- **Wire types:** none shared with runtime. Instead of importing runtime's types, `service.py` declares its own tiny `ScheduledApp` `Protocol` — just the two methods it needs from `PawApp` — right at the top of the file. Same "consumer defines the shape it depends on" pattern as `runtime/adapter.py`, scoped down to one file because only one component needs it.
+
+### Config — `paw/config/`
+
+**Purpose:** parse `config.json` (+ env overrides) into typed, immutable
+dataclasses that every other component reads from.
+
+**Files:** `load.py` only.
+
+```python
+def load_paw_config(path: Path = CONFIG_PATH) -> PawConfig    # cached per path for the process lifetime
+def load_raw_config(path: Path = CONFIG_PATH) -> dict          # + env overrides (PAW_SHARED_SOUL, PAW_KNOWLEDGE_ROOTS, ...)
+
+@dataclass(frozen=True)
+class PawConfig:
+    def get_agent(self, agent_id: str | None = None) -> AgentSpec
+    def enabled_interfaces(self) -> list[str]
+```
+
+- **Input:** `config.json`, environment variables.
+- **Output:** `PawConfig`, nesting `FileAccessConfig` / `FileScope`, one `AgentSpec` per agent, one `ExternalAgentSpec` per external CLI agent, `SchedulerConfig`, `SessionConfig`.
+- **Wire types:** none needed — `PawConfig` is config's own output type, read directly by every other component. Config has no peer it must stay decoupled from (everything depends on config; config depends on nothing), so unlike Brain/Tools/Agent Loop it doesn't need a neutral shared module.
+
+### Shared types across components
+
+Three places in the repo define a shape more than one component needs, and
+each picks the smallest structure that fits, in order of how many
+independent components share it:
+
+| Shared shape | Lives in | Shared by | Why there |
+| --- | --- | --- | --- |
+| `ToolDefinition`, `ToolCall`, `ToolResult`, `BrainDecision` | `paw/wire_types.py` (flat file, no folder) | `brain/`, `tools/`, `agent_loop/` | Three real peers, none of which may import another (Brain must stay tool-implementation-agnostic; Tools must stay swappable to a standalone MCP server). A neutral leaf both can depend on is the only way to avoid a false dependency. |
+| `PawInterface`, `ReplyTarget`, `UserMessage`, `ScheduledDelivery`, `FallbackDelivery` | `paw/runtime/adapter.py` | `runtime/` (owner) + every adapter in `paw/interfaces/` (implementers) | Not neutral — `runtime` is the genuine sole owner and consumer, so the contract lives with it. Adapters depend on runtime's definition, never the reverse. |
+| `ScheduledApp` | inline `Protocol` at the top of `paw/scheduler/service.py` | `scheduler/` only | Only one file needs the shape, so it isn't factored out at all — the smallest version of the same idea. |
+
+The rule this follows: a shared module is only justified when two or more
+components would otherwise have to import each other to talk. When just one
+file needs a shape, define it locally instead of preemptively factoring it
+out — that's why `ScheduledApp` is four lines inside `service.py` rather than
+a fourth entry in `wire_types.py`.
 
 External knowledge is not an Paw component. The KB lives wherever you point
 `file_access.scopes.kb.roots` in `config.json` and is exposed to Paw through the `kb` file scope.
