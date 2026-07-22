@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from paw.agent_loop.loop import AgentLoop
-from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
+from paw.wire_types import BrainDecision, ToolCall, ToolDefinition
 from paw.runtime.run_context import RunContext
 from paw.sessions.memory import Memory
 

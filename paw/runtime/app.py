@@ -8,7 +8,7 @@ from typing import Any, Iterable, Optional
 from dotenv import load_dotenv
 
 from paw.config import PawConfig, load_paw_config
-from paw.contracts.interfaces import PawInterface, UserMessage
+from paw.runtime.adapter import PawInterface, UserMessage
 from paw.runtime.control import (
     NEW_SESSION_MESSAGE,
     is_new_session_command,

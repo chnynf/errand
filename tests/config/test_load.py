@@ -39,17 +39,6 @@ def test_load_raw_config_applies_knowledge_roots_override(tmp_path: Path, monkey
     assert data["file_access"]["scopes"]["kb"]["roots"] == ["root-a", "root-b"]
 
 
-def test_load_raw_config_converts_legacy_knowledge_roots(tmp_path: Path):
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps({"knowledge": {"allowed_roots": ["legacy-root"]}}),
-        encoding="utf-8",
-    )
-
-    data = load_raw_config(config_path)
-    assert data["file_access"]["scopes"]["kb"]["roots"] == ["legacy-root"]
-
-
 def test_load_paw_config_synthesizes_legacy_default_agent(tmp_path: Path):
     config_path = tmp_path / "config.json"
     config_path.write_text(

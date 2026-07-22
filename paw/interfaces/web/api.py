@@ -26,12 +26,6 @@ COMPONENTS = [
         "connects_to": ["brain", "agent_loop", "sessions", "scheduler", "interfaces"],
     },
     {
-        "id": "contracts",
-        "label": "Contracts",
-        "description": "Shared types: ToolCall, BrainDecision, UserMessage, ReplyTarget.",
-        "connects_to": ["brain", "agent_loop", "tools", "interfaces"],
-    },
-    {
         "id": "interfaces",
         "label": "Interfaces",
         "description": "Discord, CLI, Web — normalize external input into UserMessage.",

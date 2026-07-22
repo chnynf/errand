@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from paw.brain.providers.litellm import LiteLLMProvider
-from paw.contracts.types import ToolDefinition
+from paw.wire_types import ToolDefinition
 
 
 def _mk_response(

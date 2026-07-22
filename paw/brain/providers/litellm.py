@@ -31,7 +31,7 @@ from litellm.exceptions import (
 )
 
 from paw.brain.providers.base import LLMProvider, ProviderRegistry
-from paw.contracts.types import (
+from paw.wire_types import (
     BrainDecision,
     ToolCall,
     ToolDefinition,

@@ -1,4 +1,17 @@
-"""Provider-agnostic types passed between components."""
+"""The tool-calling wire format shared by brain, tools, and agent_loop.
+
+A leaf module: nothing here imports from any other Paw component, and it
+carries no behavior of its own. It exists because these three components are
+peers that must not depend on each other -- brain stays provider-and-tool-
+implementation-agnostic, and tools stays swappable to a standalone MCP server
+(see paw/tools/registry.py) -- so the shapes they exchange live here instead
+of inside any one of them.
+
+    tools.registry  --ToolDefinition-->  brain
+    brain           --BrainDecision(tool_calls)-->  agent_loop
+    agent_loop      --ToolCall/params-->  tools.registry
+    tools.registry  --ToolResult-->  agent_loop
+"""
 
 from __future__ import annotations
 

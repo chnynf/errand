@@ -4,7 +4,7 @@ import contextlib
 import uvicorn
 
 from paw.interfaces.web.interface import WebInterface
-from paw.contracts.interfaces import UserMessage
+from paw.runtime.adapter import UserMessage
 from paw.runtime.control import NEW_SESSION_MESSAGE, reload_message
 from paw.runtime.app import PawApp
 

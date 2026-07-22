@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from paw.brain import Brain
-from paw.contracts.types import ToolDefinition
+from paw.wire_types import ToolDefinition
 
 
 def _mk_response(*, content=None, tool_calls=None):

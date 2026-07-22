@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from paw.agent_loop.loop import AgentLoop, CONTEXT_OVERFLOW_TOKENS
-from paw.contracts.types import BrainDecision, ToolCall, ToolDefinition
+from paw.wire_types import BrainDecision, ToolCall, ToolDefinition
 from paw.sessions.memory import Memory
 
 

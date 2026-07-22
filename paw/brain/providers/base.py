@@ -3,7 +3,7 @@
 import abc
 from typing import Dict, List, Optional, Tuple, Type
 
-from paw.contracts.types import (
+from paw.wire_types import (
     BrainDecision,
     ToolDefinition,
 )

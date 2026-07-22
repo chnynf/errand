@@ -30,7 +30,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from paw.contracts.types import ToolDefinition, ToolCall, ToolResult
+from paw.wire_types import ToolDefinition, ToolCall, ToolResult
 
 TOOLS_DIR = Path(__file__).resolve().parent
 

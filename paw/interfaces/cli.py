@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from paw.contracts.interfaces import UserMessage
+from paw.runtime.adapter import UserMessage
 
 if TYPE_CHECKING:
     from paw.runtime.app import PawApp

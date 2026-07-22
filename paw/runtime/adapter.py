@@ -1,4 +1,12 @@
-"""Interface protocols shared between the runtime and interface adapters."""
+"""Runtime's contract for pluggable interface adapters.
+
+Owned by runtime: ``PawApp`` (runtime/app.py) is the sole consumer that
+dictates this shape. Each concrete adapter under ``paw/interfaces/``
+(Discord, CLI, WeChat, Web) implements ``PawInterface`` and hands the
+runtime ``UserMessage`` objects to plug in -- the dependency points from the
+adapters to this module, never back, so this can live with its owner instead
+of in a shared/neutral location.
+"""
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol

@@ -10,7 +10,7 @@ from textwrap import dedent
 
 import pytest
 
-from paw.contracts.types import ToolCall, ToolResult
+from paw.wire_types import ToolCall, ToolResult
 from paw.tools.registry import ToolRegistry
 
 

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from paw.contracts.interfaces import UserMessage
+from paw.runtime.adapter import UserMessage
 from paw.runtime.control import is_control_command
 
 if TYPE_CHECKING:

@@ -402,21 +402,18 @@ API. Components import only downward in the dependency graph below.
 
 ```mermaid
 flowchart TD
-    Interfaces["interfaces: transport"] --> Runtime["runtime: lifecycle"]
+    Interfaces["interfaces: transport"] --> Runtime["runtime: lifecycle + adapter contract"]
     Runtime --> Sessions["sessions: cache, locks, memory"]
     Sessions --> Loop["agent_loop: think/act loop"]
     Loop --> Brain["brain: prompts + model routing"]
     Loop --> Tools["tools: registry + plugins"]
     Tools --> Config["config: scopes and permissions"]
     Runtime --> Scheduler["scheduler: timed jobs"]
-    Brain --> Contracts["contracts: shared types"]
-    Tools --> Contracts
-    Interfaces --> Contracts
 ```
 
 | Component | Folder | Main API | Input | Output | Owns |
 | --- | --- | --- | --- | --- | --- |
-| Runtime | `paw/runtime/` | `PawApp.start()`, `stop()`, `handle_user_message()` | Config, enabled interfaces, normalized user messages | Started services, final replies | Process lifecycle and component wiring |
+| Runtime | `paw/runtime/` | `PawApp.start()`, `stop()`, `handle_user_message()` | Config, enabled interfaces, normalized user messages | Started services, final replies | Process lifecycle, component wiring, and the `PawInterface`/`UserMessage`/`ReplyTarget` adapter contract (`paw/runtime/adapter.py`) that every interface implements |
 | Interfaces | `paw/interfaces/` | `Interface.start()`, `stop()`, `ReplyTarget.send()` | Discord / CLI events | `UserMessage` objects and outbound replies | Transport-specific translation only |
 | Sessions | `paw/sessions/` | `SessionManager.process(session_id, text, metadata)`, `archive()`, `shutdown()` | Session ID, text, metadata | Final response string, persisted session state | Per-session locking, cache, memory persistence |
 | Agent Loop | `paw/agent_loop/` | `AgentLoop.process_input(text, metadata)` | User turn plus session memory | Final assistant text | Think/act loop: brain call, tool execution, memory updates |
@@ -424,8 +421,13 @@ flowchart TD
 | Tools | `paw/tools/` | `ToolRegistry.get_tool_definitions()`, `ToolRegistry.execute(...)`, file plugins like `read_file` / `write_file` / `edit_file` | Tool schemas and tool calls | Tool results | Tool discovery, schema generation, execution, scoped file access |
 | Scheduler | `paw/scheduler/` | `SchedulerService.start()`, `run_tick()` | Job store, current time | Scheduled agent runs and delivery requests | Timed jobs and recurrence |
 | Config | `paw/config/` | `load_raw_config()`, `load_paw_config()` | `config.json`, env overrides | `PawConfig`, `FileAccessConfig`, `FileScope` | Configuration parsing and file scope policy |
-| Contracts | `paw/contracts/` | Shared dataclasses and protocols | Internal only | Internal only | Cross-component types (`ToolCall`, `BrainDecision`, `UserMessage`, etc.) |
 | Prompt Assembly | `paw/agent_loop/` (`prompt_assembler.py`, `agent.md`) | `PromptAssembler.build_prompt(...)` | History + current exchange + volatile context | Four-section message list | Prompt structure and harness-level instructions |
+
+`paw/wire_types.py` is deliberately not a component in this table: it's a single
+leaf file (no folder, no behavior) holding the tool-calling dataclasses
+(`ToolCall`, `ToolResult`, `ToolDefinition`, `BrainDecision`) that Brain, Tools,
+and Agent Loop exchange without depending on each other. It stays a flat file
+rather than a folder specifically so it can't be mistaken for a component.
 
 External knowledge is not an Paw component. The KB lives wherever you point
 `file_access.scopes.kb.roots` in `config.json` and is exposed to Paw through the `kb` file scope.

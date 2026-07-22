@@ -20,7 +20,7 @@ from typing import List, Optional
 from paw.agent_loop.prompt_assembler import PromptAssembler
 from paw.brain import Brain
 from paw.config import PawConfig, load_paw_config
-from paw.contracts.types import (
+from paw.wire_types import (
     BrainDecision,
     ToolCall,
     ToolDefinition,

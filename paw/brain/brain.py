@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 from paw.brain.providers import ProviderRegistry
 from paw.config import AgentSpec, PawConfig, load_raw_config
-from paw.contracts.types import (
+from paw.wire_types import (
     BrainDecision,
     ToolDefinition,
 )

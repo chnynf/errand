@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import discord
 from aiohttp import ClientConnectorError, ClientOSError
 
-from paw.contracts.interfaces import UserMessage
+from paw.runtime.adapter import UserMessage
 
 if TYPE_CHECKING:
     from paw.runtime.app import PawApp

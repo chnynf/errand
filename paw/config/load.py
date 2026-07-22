@@ -299,20 +299,6 @@ def load_raw_config(path: Path = CONFIG_PATH) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Legacy ``knowledge.allowed_roots`` is mapped into the ``kb`` scope so
-    # older configs keep working. New configs should use ``file_access``.
-    if "file_access" not in data and data.get("knowledge", {}).get("allowed_roots"):
-        data["file_access"] = {
-            "default_scope": "kb",
-            "scopes": {
-                "kb": {
-                    "roots": data["knowledge"]["allowed_roots"],
-                    "read": True,
-                    "list": True,
-                }
-            },
-        }
-
     if shared_soul := os.getenv("PAW_SHARED_SOUL"):
         data["shared_soul"] = shared_soul
         default_agent = data.get("default_agent")
