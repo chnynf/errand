@@ -6,6 +6,7 @@ from email.message import EmailMessage
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from paw.tools.files import _resolve as _resolve_file_path
 
 _CONTACTS_FILE = Path(__file__).resolve().parent.parent / "contacts.md"
 
@@ -58,7 +59,10 @@ def _resolve_attachments(attachments: str) -> tuple[list[Path], list[str]]:
     resolved: list[Path] = []
     missing: list[str] = []
     for entry in entries:
-        path = Path(entry).expanduser()
+        # Same resolution rules as read_file/write_file: `[kb-root]/...`,
+        # absolute, or bare-relative-against-the-KB-root -- so a path a file
+        # tool just reported back can be passed here verbatim.
+        path = _resolve_file_path(entry)
         if path.is_file():
             resolved.append(path)
         else:
@@ -79,7 +83,10 @@ def send_email(to: str, subject: str, body: str, attachments: str = "") -> str:
             "Hi, I'm Yunfei's AI assistant." — unless the user explicitly asks
             you not to identify yourself.
         attachments: Optional file path, or several paths separated by commas
-            or newlines. Each must be an existing file. Leave empty for none.
+            or newlines. Same path rules as read_file/write_file -- a
+            `[kb-root]/...` path, an absolute path, or a bare relative path
+            (resolved against the KB root). Each must be an existing file.
+            Leave empty for none.
 
     Returns: Success or error message.
     """
