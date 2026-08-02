@@ -191,21 +191,12 @@ class PawApp:
         await self.session_manager.archive(session_id, start_new=start_new)
 
     async def process_scheduled_job(self, session_id: str, text: str, name: str) -> str:
-        """Run a scheduled job prompt through a fresh session.
+        """Run a scheduled job prompt through its (freshly-named) session.
 
-        Each fire archives the prior run (and any interactive follow-ups that
-        landed in the same channel) and starts clean -- the internal equivalent
-        of a ``/new`` before the task. A scheduled job's durable state lives in
-        the files it edits, not in the chat transcript, so carrying the previous
-        run's history forward only re-bills those tokens on every fire (and
-        across a multi-hour gap it isn't even cache-warm). Archiving keeps the
-        record on disk while giving the model a minimal, fresh prompt.
+        The scheduler names a brand new session for every fire (see
+        ``SchedulerService.run_tick``), so there is no prior history to
+        archive or collide with here -- each run starts clean by construction.
         """
-        await self.session_manager.archive(
-            session_id,
-            start_new=True,
-            agent_id=self.config.default_agent,
-        )
         return await self.session_manager.process(
             session_id,
             text,
@@ -215,23 +206,41 @@ class PawApp:
 
     async def deliver_scheduled_result(
         self,
-        task_session_id: str,
+        *,
+        session_id: str,
+        interface: str,
+        job_name: str,
         message: str,
-        context_id: str | None = None,
     ) -> bool:
-        """Deliver a scheduled result to its origin, falling back on failure."""
-        for interface in self._interfaces:
-            deliver = getattr(interface, "deliver_scheduled_result", None)
-            if not deliver:
-                continue
-            handled = await deliver(task_session_id, message, context_id=context_id)
-            if handled:
+        """Deliver a scheduled job's result.
+
+        Always delivered via Discord, in a fresh channel/session named after
+        ``session_id`` -- Discord is the only interface that can receive a
+        proactive push (WeChat, for instance, can only reply to an inbound
+        message). A job whose origin ``interface`` isn't Discord still lands
+        here, with a note that its origin wasn't supported for delivery.
+        """
+        text = message.strip() if message and message.strip() else f"Scheduled job {job_name} finished."
+
+        if interface != "discord":
+            text = (
+                f"⚠️ Interface {interface!r} is not supported for scheduled delivery; "
+                f"delivered here instead.\n\n{text}"
+            )
+            return await self._deliver_fallback_raw(text)
+
+        discord = self._discord_interface()
+        if discord is not None:
+            delivered = await discord.deliver_scheduled_result(session_id, text)
+            if delivered:
                 return True
-        return await self._send_fallback(
-            self._source_label(context_id),
-            message,
-            context_id=context_id,
-        )
+        return await self._deliver_fallback_raw(text)
+
+    def _discord_interface(self):
+        for interface in self._interfaces:
+            if interface.name == "discord":
+                return interface
+        return None
 
     async def _send_final(
         self,
@@ -261,6 +270,15 @@ class PawApp:
             f"I tried to reach you on {source}, but couldn't send the message. "
             f"Here's the message: {message}"
         )
+        return await self._deliver_fallback_raw(text, context_id=context_id)
+
+    async def _deliver_fallback_raw(
+        self,
+        text: str,
+        *,
+        context_id: str | None = None,
+    ) -> bool:
+        """Send pre-composed text through whichever interface has a fallback route."""
         for interface in self._interfaces:
             deliver = getattr(interface, "deliver_fallback_message", None)
             if not deliver:
@@ -270,21 +288,8 @@ class PawApp:
                     return True
             except Exception as e:
                 print(f"Fallback delivery error via {interface.name}: {e}")
-        print(f"Fallback delivery failed: no interface delivered message from {source}")
+        print("Fallback delivery failed: no interface delivered the message")
         return False
-
-    @staticmethod
-    def _source_label(context_id: str | None) -> str:
-        """Best-effort human label for the origin a message could not reach."""
-        if not context_id:
-            return "your original channel"
-        if ":" in context_id:
-            return context_id.split(":", 1)[0]
-        if context_id == "cli_session":
-            return "cli"
-        if str(context_id).isdigit():
-            return "discord"
-        return context_id
 
     def _build_interfaces(self, names: list[str]) -> list[PawInterface]:
         def _load(name: str):

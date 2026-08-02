@@ -55,15 +55,17 @@ class UserMessage:
 
 
 class ScheduledDelivery(Protocol):
-    """Interface capability for scheduled task delivery."""
+    """Interface capability for scheduled task delivery.
 
-    async def deliver_scheduled_result(
-        self,
-        task_session_id: str,
-        message: str,
-        context_id: str | None = None,
-    ) -> bool:
-        """Deliver a scheduled job result. Return True if handled."""
+    Only Discord implements this today: it's the one interface that can
+    receive a proactive push rather than merely reply to an inbound message.
+    """
+
+    async def deliver_scheduled_result(self, session_id: str, message: str) -> bool:
+        """Create a fresh channel/session named ``session_id`` and post ``message``.
+
+        Return True if handled.
+        """
 
 
 class FallbackDelivery(Protocol):

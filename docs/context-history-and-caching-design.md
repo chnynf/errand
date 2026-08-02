@@ -211,33 +211,43 @@ normalized across providers by LiteLLM.
 
 ---
 
-## Scheduled jobs run in a fresh session per fire
+## Scheduled jobs: a fresh session and channel per fire, delivered via Discord
 
-A scheduled job's session id is stable: `scheduled:{job_id}` (`scheduler/store.py`).
-So without intervention, every nightly fire **reuses the same session** and
-replays prior fires' history — on *every* call of the new run, and **uncached**
-(the implicit cache is cold after a multi-hour gap). The history window caps this
-at ~2–3 nights, but the session file also grows unbounded.
+Earlier design: a scheduled job's session id was stable (`scheduled:{job_id}`),
+delivered back to whichever channel/interface a stored `delivery_session_id`
+pointed at. Two problems fell out of that in practice:
 
-**Decision:** `process_scheduled_job` (`runtime/app.py`) archives-and-starts-new
-**before** each fire — the internal equivalent of `/new` then the task — reusing
-the same `session_manager.archive(session_id, start_new=True, agent_id=...)` call
-the `/new` control command uses.
+- `delivery_session_id` was captured from whatever the *current* session
+  happened to be when `schedule_message` was called — if that session was
+  itself a scheduled job's ephemeral session (e.g. scheduling one job from
+  inside another job's delivery thread), the new job inherited a
+  non-routable id and silently fell through to fallback.
+- Reusing the same session id across fires meant an in-between interactive
+  reply (e.g. approving a proposal) could be archived out from under the user
+  by the *next* fire before they got to it, and Discord had to reverse-scan a
+  channel↔job mapping to route replies back correctly.
+- Not every interface can even receive a proactive push — WeChat, for
+  instance, can only reply to an inbound message, so a job scheduled from
+  WeChat had no delivery path at all.
 
-Rationale and properties:
+**Decision:** `jobs.json` stores only the originating `interface` name (for a
+support check), no session/channel identity at all. Each fire
+(`SchedulerService.run_tick`) mints a brand-new session id,
+`scheduled-{job_id}-{epoch}`, and runs the job under it — there is nothing to
+archive, since the id has never been used before. Delivery
+(`PawApp.deliver_scheduled_result`) always goes through Discord: it creates a
+new channel named after that same session id and binds `channel_id ->
+session_id` directly (`DiscordInterface._bind_channel_to_session`), so a
+later reply in that channel resolves straight back to the run that produced
+it via `_session_id_for_channel` — a plain forward lookup, not a scan. If the
+job's origin `interface` isn't `"discord"`, or Discord delivery fails, the
+result routes through `FallbackDelivery` instead, with a note that the origin
+interface wasn't supported. If a job produces no text response at all, a
+fixed `"Scheduled job {name} finished."` is delivered instead of nothing.
 
-- A scheduled job's **durable state lives in the files it edits**
-  (`inbox.md`, `reviews/`, subject files), *not* in the chat transcript. Carrying
-  the transcript forward adds little and costs tokens every fire.
-- **Same session id / same channel** — delivery is unaffected (it routes via
-  `context_id`/`delivery_session_id`).
-- **Interactive follow-ups** the user sends after a fire (e.g. "Please
-  implement") land in the same session and continue normally; they're archived at
-  the *next* fire (~24h later), not mid-conversation.
-- **Audit preserved** — prior runs move to `_data/archive/`, exactly like `/new`.
-- First-ever fire is a safe no-op archive, then a fresh run.
-
-This reset is scoped to scheduled jobs; interactive sessions are untouched.
+This keeps a job's durable state where it already lived — the files it
+edits — while making delivery unconditional and routing self-correcting
+(every fire gets an unambiguous, never-reused destination).
 
 ---
 

@@ -23,6 +23,12 @@ _DISCORD_MAX_RETRY_SECONDS = 60
 _FALLBACK_CHANNEL_NAME = "fallback-messages"
 
 
+def _slugify_channel_name(name: str, limit: int = 90) -> str:
+    """Discord channel names are lowercase alnum/hyphen/underscore, length-capped."""
+    slug = "".join(c if (c.isalnum() or c in "-_") else "-" for c in name.lower())
+    return slug[:limit]
+
+
 def _proxy_from_env() -> str | None:
     """Return a proxy URL from standard env vars, if configured."""
     return (
@@ -174,7 +180,8 @@ class DiscordInterface:
         self._app = app
         self._debug = debug
         self._client = DiscordClient(self, debug=debug)
-        self._mapping: dict[str, dict] = {}
+        # channel_id (str) -> currently-active session_id for that channel.
+        self._mapping: dict[str, str] = {}
         self._load_mapping()
 
     def is_configured(self) -> bool:
@@ -218,9 +225,6 @@ class DiscordInterface:
             return
 
         session_id = self._session_id_for_channel(message.channel.id)
-        guild_id = message.guild.id if message.guild else None
-        if guild_id and not session_id.startswith("scheduled:"):
-            self._set_session_channel(str(message.channel.id), message.channel.id, guild_id)
 
         content = message.content.replace(f"<@{self._client.user.id}>", "").strip()
         if not content:
@@ -252,57 +256,29 @@ class DiscordInterface:
         except Exception as e:
             print(f"Error archiving session for channel {channel.id}: {e}")
 
-    async def deliver_scheduled_result(
-        self,
-        task_session_id: str,
-        message: str,
-        context_id: str | None = None,
-    ) -> bool:
-        """Deliver scheduled job results to Discord."""
-        entry = self._mapping.get(str(task_session_id))
+    async def deliver_scheduled_result(self, session_id: str, message: str) -> bool:
+        """Create a fresh channel named after ``session_id`` and post the result there.
 
-        if not entry:
-            if not context_id:
-                print(
-                    f"Scheduler delivery: no mapping for {task_session_id} "
-                    "and no context_id provided"
-                )
-                return False
-            entry = self._guild_entry_from_context(context_id)
-            if not entry:
-                return False
-
-        target_channel_id = entry.get("channel_id")
-        if target_channel_id:
-            channel = self._client.get_channel(target_channel_id)
-            if isinstance(channel, discord.TextChannel):
-                await DiscordReplyTarget(channel).send(message)
-                return True
-
-        guild = self._client.get_guild(entry.get("guild_id"))
-        if not guild:
-            print(
-                f"Scheduler delivery: guild {entry.get('guild_id')} "
-                f"not found for session {task_session_id}"
-            )
+        Every scheduled fire gets its own channel, bound as that channel's
+        active session (``_bind_channel_to_session``) so a later reply
+        naturally continues in it via ``_session_id_for_channel``.
+        """
+        guild = self._sole_guild()
+        if guild is None:
+            guilds = list(self._client.guilds)
+            if not guilds:
+                print("Scheduler delivery: bot is not connected to any guild.")
+            else:
+                print("Scheduler delivery: multiple guilds connected; cannot choose one for a new channel.")
             return False
 
         try:
-            channel_name = f"scheduled-{str(task_session_id).replace(':', '-')[:20]}"
-            channel_name = "".join(c for c in channel_name if c.isalnum() or c in "-").lower()
-            channel = discord.utils.get(guild.text_channels, name=channel_name)
-            if channel is None:
-                channel = await guild.create_text_channel(
-                    channel_name,
-                    topic=f"Scheduled task result: {task_session_id}",
-                    reason="Scheduled task delivery",
-                )
-
-            self._mapping[str(task_session_id)] = {
-                "channel_id": channel.id,
-                "guild_id": guild.id,
-            }
-            self._save_mapping()
+            channel = await guild.create_text_channel(
+                _slugify_channel_name(session_id),
+                topic=f"Scheduled task result: {session_id}",
+                reason="Scheduled task delivery",
+            )
+            self._bind_channel_to_session(channel.id, session_id)
             await DiscordReplyTarget(channel).send(message)
             return True
         except discord.DiscordException as e:
@@ -342,10 +318,10 @@ class DiscordInterface:
         if guild is not None:
             return guild
 
-        guilds = list(self._client.guilds)
-        if len(guilds) == 1:
-            return guilds[0]
-        if not guilds:
+        guild = self._sole_guild()
+        if guild is not None:
+            return guild
+        if not list(self._client.guilds):
             print("Fallback delivery: bot is not connected to any guild.")
             return None
         print(
@@ -353,6 +329,11 @@ class DiscordInterface:
             f"{context_id!r} did not identify one; cannot choose a guild."
         )
         return None
+
+    def _sole_guild(self):
+        """Return the only connected guild, or None if there's zero/more than one."""
+        guilds = list(self._client.guilds)
+        return guilds[0] if len(guilds) == 1 else None
 
     def _guild_from_context(self, context_id: str | None):
         """Return the guild for a Discord channel-id context, else None (quiet)."""
@@ -379,21 +360,8 @@ class DiscordInterface:
             return None
 
     def _session_id_for_channel(self, channel_id: int) -> str:
-        for session_id, entry in self._mapping.items():
-            if (
-                session_id.startswith("scheduled:")
-                and isinstance(entry, dict)
-                and entry.get("channel_id") == channel_id
-            ):
-                return session_id
-        return str(channel_id)
-
-    def _guild_entry_from_context(self, context_id: str) -> dict | None:
-        guild = self._guild_from_context(context_id)
-        if guild is None:
-            print(f"Scheduler delivery: context channel {context_id} not found or not text/guild")
-            return None
-        return {"guild_id": guild.id}
+        """The channel's bound session if one exists, else the channel id itself."""
+        return self._mapping.get(str(channel_id), str(channel_id))
 
     def _load_mapping(self) -> None:
         if not _MAPPING_FILE.exists():
@@ -409,6 +377,6 @@ class DiscordInterface:
         with open(_MAPPING_FILE, "w", encoding="utf-8") as f:
             json.dump(self._mapping, f, indent=2)
 
-    def _set_session_channel(self, session_id: str, channel_id: int, guild_id: int) -> None:
-        self._mapping[str(session_id)] = {"channel_id": channel_id, "guild_id": guild_id}
+    def _bind_channel_to_session(self, channel_id: int, session_id: str) -> None:
+        self._mapping[str(channel_id)] = session_id
         self._save_mapping()

@@ -124,8 +124,8 @@ def schedule_message(
 
     Returns: Confirmation with job ID and next run time.
     """
-    session_id = str((_context or {}).get("session_id") or "").strip()
-    if not session_id:
+    interface = str((_context or {}).get("source") or "").strip()
+    if not interface:
         return "Error: scheduling unavailable (no active session context)."
 
     kind = (schedule_kind or "").strip().lower()
@@ -151,7 +151,7 @@ def schedule_message(
         name=(name or "").strip() or "Scheduled task",
         schedule=schedule,
         message=message,
-        delivery_session_id=session_id,
+        interface=interface,
         next_run_at=next_run,
         intent=intent,
     )

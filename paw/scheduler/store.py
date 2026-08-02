@@ -40,21 +40,22 @@ class JobStore:
         name: str,
         schedule: dict,
         message: str,
-        delivery_session_id: str,
+        interface: str,
         next_run_at: str,
         intent: str = "execute",
     ) -> dict:
-        """Add a new job. session_id is the kernel session for the task; delivery_session_id is where to deliver."""
+        """Add a new job. ``interface`` is the origin interface name (e.g. "discord");
+        delivery always happens through Discord regardless of origin -- see
+        ``PawApp.deliver_scheduled_result``. No session is stored: each fire gets
+        its own freshly-named session (see ``SchedulerService.run_tick``)."""
         job_id = f"job-{uuid.uuid4().hex[:12]}"
-        task_session_id = f"scheduled:{job_id}"
         now = now_iso()
         job = {
             "id": job_id,
             "name": name,
             "schedule": schedule,
             "message": message,
-            "session_id": task_session_id,
-            "delivery_session_id": delivery_session_id,
+            "interface": interface,
             "enabled": True,
             "created_at": now,
             "last_run_at": None,

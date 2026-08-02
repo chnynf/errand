@@ -16,11 +16,13 @@ class ScheduledApp(Protocol):
 
     async def deliver_scheduled_result(
         self,
-        task_session_id: str,
+        *,
+        session_id: str,
+        interface: str,
+        job_name: str,
         message: str,
-        context_id: str | None = None,
     ) -> bool:
-        """Deliver scheduled output through an available interface."""
+        """Deliver scheduled output (always via Discord; see PawApp)."""
 
 
 class SchedulerService:
@@ -70,7 +72,9 @@ class SchedulerService:
 
         for job in due:
             schedule = job["schedule"]
-            task_session_id = job["session_id"]
+            # Each fire gets its own freshly-named session -- nothing persists
+            # across runs, so there is nothing to archive or collide with.
+            session_id = f"scheduled-{job['id']}-{int(time.time())}"
 
             # Recurring jobs advance to their next fire; one-shots and expired
             # recurrences are retired.
@@ -93,13 +97,16 @@ class SchedulerService:
                 )
                 try:
                     response = await self._app.process_scheduled_job(
-                        task_session_id, prompt, name=job["name"],
+                        session_id, prompt, name=job["name"],
                     )
                 except Exception as e:
                     response = f"Error running scheduled task: {e}"
 
             delivered = await self._app.deliver_scheduled_result(
-                task_session_id, response, context_id=job["delivery_session_id"],
+                session_id=session_id,
+                interface=job.get("interface", ""),
+                job_name=job["name"],
+                message=response,
             )
             if not delivered:
-                print(f"Scheduler delivery failed: no interface handled {task_session_id}")
+                print(f"Scheduler delivery failed for job {job['id']}")

@@ -136,15 +136,12 @@ async def test_reset_command_archives_and_replies_without_model() -> None:
     assert reply.messages == [NEW_SESSION_MESSAGE]
 
 
-async def test_scheduled_job_archives_then_runs_in_fresh_session() -> None:
-    """Each scheduled fire starts clean: archive (start_new) before processing,
-    so the prior run's history is not replayed/re-billed on the next fire."""
+async def test_scheduled_job_runs_in_its_named_session() -> None:
+    """Every fire gets its own freshly-named session from the scheduler, so
+    there's nothing to archive here -- just run it under that session."""
     order: list[str] = []
 
     class Manager:
-        async def archive(self, session_id, start_new=False, *, agent_id=None):
-            order.append(("archive", session_id, start_new, agent_id))
-
         async def process(self, session_id, text, metadata=None, agent_id=None):
             order.append(("process", session_id, metadata.get("is_scheduled_task"), agent_id))
             return "ran"
@@ -153,13 +150,11 @@ async def test_scheduled_job_archives_then_runs_in_fresh_session() -> None:
     app.session_manager = Manager()
     app.config = type("Config", (), {"default_agent": "generalist"})()
 
-    result = await app.process_scheduled_job("scheduled:job-x", "do the task", name="nightly")
+    result = await app.process_scheduled_job("scheduled-job-x-123", "do the task", name="nightly")
 
     assert result == "ran"
-    # Archive must happen first, and with start_new=True under the same agent.
     assert order == [
-        ("archive", "scheduled:job-x", True, "generalist"),
-        ("process", "scheduled:job-x", True, "generalist"),
+        ("process", "scheduled-job-x-123", True, "generalist"),
     ]
 
 
@@ -183,8 +178,8 @@ class _FallbackInterface:
         self._scheduled_result = scheduled_result
         self._fallback_result = fallback_result
 
-    async def deliver_scheduled_result(self, task_session_id, message, context_id=None):
-        self.scheduled_calls.append((task_session_id, message, context_id))
+    async def deliver_scheduled_result(self, session_id, message):
+        self.scheduled_calls.append((session_id, message))
         return self._scheduled_result
 
     async def deliver_fallback_message(self, message, context_id=None):
@@ -226,29 +221,59 @@ async def test_send_final_failure_routes_to_fallback() -> None:
     assert context_id == "wechat:1"
 
 
-async def test_scheduled_origin_success_skips_fallback() -> None:
+async def test_scheduled_delivery_via_discord_skips_fallback() -> None:
     fb = _FallbackInterface(scheduled_result=True)
     app = _app_with_interfaces([fb])
 
-    result = await app.deliver_scheduled_result("scheduled:job-1", "do it", context_id="123")
+    result = await app.deliver_scheduled_result(
+        session_id="scheduled-job-1-123", interface="discord", job_name="nightly", message="do it",
+    )
 
     assert result is True
+    assert fb.scheduled_calls == [("scheduled-job-1-123", "do it")]
     assert fb.fallback_calls == []
 
 
-async def test_scheduled_origin_failure_routes_to_fallback() -> None:
+async def test_scheduled_delivery_discord_failure_routes_to_fallback() -> None:
     fb = _FallbackInterface(scheduled_result=False)
     app = _app_with_interfaces([fb])
 
     result = await app.deliver_scheduled_result(
-        "scheduled:job-1", "do it", context_id="wechat:42"
+        session_id="scheduled-job-1-123", interface="discord", job_name="nightly", message="do it",
     )
 
     assert result is True
     assert len(fb.fallback_calls) == 1
     text, _ = fb.fallback_calls[0]
-    assert "I tried to reach you on wechat" in text
     assert "do it" in text
+
+
+async def test_scheduled_delivery_unsupported_interface_routes_to_fallback() -> None:
+    fb = _FallbackInterface()
+    app = _app_with_interfaces([fb])
+
+    result = await app.deliver_scheduled_result(
+        session_id="scheduled-job-1-123", interface="wechat", job_name="nightly", message="do it",
+    )
+
+    assert result is True
+    assert fb.scheduled_calls == []
+    text, _ = fb.fallback_calls[0]
+    assert "'wechat'" in text
+    assert "not supported" in text
+    assert "do it" in text
+
+
+async def test_scheduled_delivery_no_message_uses_fixed_confirmation() -> None:
+    fb = _FallbackInterface(scheduled_result=True)
+    app = _app_with_interfaces([fb])
+
+    result = await app.deliver_scheduled_result(
+        session_id="scheduled-job-1-123", interface="discord", job_name="nightly", message="   ",
+    )
+
+    assert result is True
+    assert fb.scheduled_calls == [("scheduled-job-1-123", "Scheduled job nightly finished.")]
 
 
 async def test_fallback_failure_returns_false() -> None:

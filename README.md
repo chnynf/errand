@@ -468,8 +468,8 @@ class PawApp:
     async def stop(self) -> None            # stops services, persists sessions
     async def handle_user_message(self, message: UserMessage) -> None
     async def process_scheduled_job(self, session_id: str, text: str, name: str) -> str
-    async def deliver_scheduled_result(self, task_session_id: str, message: str,
-                                        context_id: str | None = None) -> bool
+    async def deliver_scheduled_result(self, *, session_id: str, interface: str,
+                                        job_name: str, message: str) -> bool
     async def archive_session(self, session_id: str, start_new: bool = False) -> None
     def reload_prompt_resources(self, session_id: str, agent_id: str, *, soul: bool, profile: bool) -> None
 
@@ -477,7 +477,7 @@ async def run_paw(debug: bool = False, interfaces: list[str] | None = None) -> N
 ```
 
 - **Input:** `PawConfig`; a `UserMessage` from any adapter; a due-job trigger from `SchedulerService`.
-- **Output:** started/stopped adapter and scheduler tasks; the final reply sent back through the message's own `ReplyTarget`; scheduled/fallback results routed to whichever adapter implements `ScheduledDelivery` / `FallbackDelivery` (today only Discord does).
+- **Output:** started/stopped adapter and scheduler tasks; the final reply sent back through the message's own `ReplyTarget`; scheduled results always delivered via Discord (a fresh channel/session per fire) regardless of which interface the job was scheduled from -- Discord is the only adapter that can push a message without one first arriving. A job from an unsupported/unknown interface, or any delivery Discord can't complete, falls back through `FallbackDelivery`.
 - **Wire types it owns:** `PawInterface`, `ReplyTarget`, `UserMessage`, `ScheduledDelivery`, `FallbackDelivery` — all defined in `paw/runtime/adapter.py`. Every adapter under `paw/interfaces/` implements this contract to plug in; the dependency points from the adapters to runtime, never back, so the contract lives with its one true owner instead of a shared/neutral module.
 
 ### Interfaces — `paw/interfaces/`
